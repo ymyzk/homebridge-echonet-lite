@@ -1,7 +1,12 @@
 {
-  "name": "homebridge-echonet-lite",
+  "displayName": "Homebridge Echonet Lite (NB)",
+  "name": "@neerajbaid/homebridge-echonet-lite",
   "version": "1.0.0",
   "main": "lib/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/neerajbaid/homebridge-echonet-lite.git"
+  },
   "keywords": [
     "homebridge-plugin",
     "homekit",
