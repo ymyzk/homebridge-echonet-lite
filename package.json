@@ -1,7 +1,7 @@
 {
   "displayName": "Homebridge Echonet Lite (NB)",
   "name": "@neerajbaid/homebridge-echonet-lite",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "main": "lib/index.js",
   "repository": {
     "type": "git",
