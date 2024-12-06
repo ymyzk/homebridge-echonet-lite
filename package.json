@@ -18,11 +18,17 @@
       "url": "http://creativecommons.org/licenses/by-nc-sa/4.0/"
     }
   ],
+  "scripts": {
+    "format": "prettier --write ."
+  },
   "engines": {
     "homebridge": ">= 0.4.0"
   },
   "dependencies": {
     "bobolink": "3.0.0",
     "echonet-lite-more": "0.4.1"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2"
   }
 }

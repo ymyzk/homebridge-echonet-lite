@@ -6,12 +6,12 @@ Homebridge plugin for ECHONET Lite devices.
 
 Implemented:
 
-* Light bulb
-* Air conditioner
+- Light bulb
+- Air conditioner
 
 Tested on:
 
-* MoekadenRoom (I don't yet have an EchonetLite device)
+- MoekadenRoom (I don't yet have an EchonetLite device)
 
 ## Usage
 
