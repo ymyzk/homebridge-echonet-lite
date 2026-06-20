@@ -20,7 +20,8 @@
     "format": "prettier --write ."
   },
   "engines": {
-    "homebridge": ">= 0.4.0"
+    "homebridge": "^1.8.0 || ^2.0.0",
+    "node": "^22.12.0 || ^24.0.0"
   },
   "dependencies": {
     "bobolink": "^3.0.0",
