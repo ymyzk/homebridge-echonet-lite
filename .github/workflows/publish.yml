@@ -18,10 +18,4 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
       - run: npm install
-      - run: |
-          PRERELEASE=$(node -p "require('./package.json').version.split('-')[1]?.split('.')[0] ?? ''")
-          if [ -n "$PRERELEASE" ]; then
-            npm publish --provenance --access public --tag "$PRERELEASE"
-          else
-            npm publish --provenance --access public
-          fi
+      - run: npm publish --provenance --access public
