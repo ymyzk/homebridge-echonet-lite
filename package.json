@@ -29,5 +29,8 @@
   },
   "devDependencies": {
     "prettier": "^3.4.2"
+  },
+  "publishConfig": {
+    "tag": "alpha"
   }
 }
