@@ -2,8 +2,7 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  // "lib/**" is ignored temporarily until the TypeScript port in src/ replaces it.
-  { ignores: ["dist/**", "lib/**", "homebridge-plugin-template/**", "test/**", "sample*.js"] },
+  { ignores: ["dist/**", "homebridge-plugin-template/**", "test/**", "sample*.js"] },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
