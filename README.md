@@ -15,14 +15,26 @@ Tested on:
 
 ## Usage
 
+If you use [Homebridge Config UI X](https://github.com/homebridge/homebridge-config-ui-x), you can
+configure this plugin from its settings form. Otherwise, add a platform block to your `config.json`:
+
 ```js
 "platforms": [
   {
     "platform": "ELPlatform",
-    "enableRefreshSwitch": true
+    "name": "ECHONET Lite",
+    "enableRefreshSwitch": false
   }
 ]
 ```
+
+### Options
+
+| Option                | Type    | Default        | Description                                                                                                                                                                                                                                  |
+| --------------------- | ------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform`            | string  | —              | Required. Must be `ELPlatform`.                                                                                                                                                                                                              |
+| `name`                | string  | `ECHONET Lite` | Name shown in the Homebridge log for this platform.                                                                                                                                                                                          |
+| `enableRefreshSwitch` | boolean | `false`        | Expose a "Refresh ECHONET Lite" switch in HomeKit. Turning it on runs a 10-second discovery scan for ECHONET Lite devices on the local network, then switches itself back off. Disabling this option removes the switch on the next restart. |
 
 ## Credits
 
