@@ -1,0 +1,24 @@
+{
+  "pluginAlias": "ELPlatform",
+  "pluginType": "platform",
+  "singular": true,
+  "strictValidation": false,
+  "schema": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "ECHONET Lite",
+        "description": "Name shown in the Homebridge log for this platform."
+      },
+      "enableRefreshSwitch": {
+        "title": "Enable Refresh Switch",
+        "type": "boolean",
+        "default": false,
+        "description": "Expose a \"Refresh ECHONET Lite\" switch in HomeKit. Turning it on runs a 10-second discovery scan for ECHONET Lite devices on the local network, then switches itself back off. Disabling this option removes the switch on the next restart."
+      }
+    }
+  }
+}
