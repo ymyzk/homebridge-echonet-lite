@@ -29,6 +29,8 @@
     "node-echonet-lite": "^0.6.0"
   },
   "devDependencies": {
+    "homebridge": "^2.2.1",
+    "homebridge-config-ui-x": "^5.27.0",
     "prettier": "^3.4.2"
   },
   "publishConfig": {
