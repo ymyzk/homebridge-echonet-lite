@@ -1,1 +1,4 @@
 node_modules/
+dist/
+homebridge-plugin-template/
+test/
