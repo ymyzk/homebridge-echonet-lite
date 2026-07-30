@@ -2,9 +2,10 @@ import type { API, Characteristic, DynamicPlatformPlugin, Logging, PlatformAcces
 
 import { createAccessoryHandler } from "./accessories/factory.js";
 import { RefreshSwitchAccessory } from "./accessories/refresh-switch.js";
+import { getAccessoryContext, setAccessoryContext } from "./accessory-context.js";
 import { EchonetLiteClient } from "./echonet-lite.js";
+import { readLegacyStorage } from "./legacy-storage.js";
 import { PLATFORM_NAME, PLUGIN_NAME } from "./settings.js";
-import { AccessoryStorage } from "./storage.js";
 import type { ELPlatformConfig, EOJ } from "./types.js";
 import { formatDeviceId } from "./utils.js";
 
@@ -17,7 +18,6 @@ export class ELPlatform implements DynamicPlatformPlugin {
   public readonly el: EchonetLiteClient;
   public readonly accessories = new Map<string, PlatformAccessory>();
 
-  private readonly storage: AccessoryStorage;
   private readonly builtAccessories = new Set<string>();
   private refreshSwitch: RefreshSwitchAccessory | null = null;
   private cachedRefreshSwitchAccessory: PlatformAccessory | null = null;
@@ -31,7 +31,6 @@ export class ELPlatform implements DynamicPlatformPlugin {
     this.Service = api.hap.Service;
     this.Characteristic = api.hap.Characteristic;
     this.el = new EchonetLiteClient(log);
-    this.storage = new AccessoryStorage(api, log);
 
     // The config can be missing when the platform was removed from
     // config.json but cached accessories still reference it.
@@ -94,6 +93,10 @@ export class ELPlatform implements DynamicPlatformPlugin {
   private async init(): Promise<void> {
     this.log.info("Executing didFinishLaunching callback");
 
+    // Before anything that can fail, so the accessories are never left without
+    // the device info that only the legacy file still holds.
+    this.migrateLegacyAccessories();
+
     try {
       await this.el.init();
     } catch (err) {
@@ -106,24 +109,65 @@ export class ELPlatform implements DynamicPlatformPlugin {
       this.buildRefreshAccessory();
     }
 
+    // Nothing was cached, so this is a first run: scan the network to find the
+    // devices instead of waiting for the refresh switch.
     if (this.accessories.size === 0) {
-      // If there is no stored information (i.e. first time run) then do discovery.
       this.log.info("No existing accessories found");
       await this.startDiscovery();
-    } else {
-      // Otherwise try to recover old accessories.
-      this.log.info("Restoring existing accessories");
-      for (const [uuid, accessory] of this.accessories) {
-        const info = this.storage.get(uuid);
-        if (info) {
-          this.log.info("Adding existing accessory:", formatDeviceId(uuid, info.address, info.eoj));
-          await this.addAccessory(info.address, info.eoj, uuid);
-        } else {
-          this.accessories.delete(uuid);
-          this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-        }
+      return;
+    }
+
+    // Otherwise rebuild every cached accessory from the device info Homebridge
+    // restored with it, so a boot costs no discovery scan. Devices added later
+    // are picked up by the refresh switch.
+    this.log.info("Restoring existing accessories");
+    // Snapshot: the loop drops the accessories it cannot restore as it goes.
+    for (const [uuid, accessory] of [...this.accessories]) {
+      if (this.builtAccessories.has(uuid)) {
+        continue;
       }
-      this.el.startMembershipRenewal();
+
+      const context = getAccessoryContext(accessory);
+      if (!context) {
+        this.log.warn("Removing an accessory with no cached device info:", uuid);
+        this.accessories.delete(uuid);
+        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+        continue;
+      }
+
+      const deviceId = formatDeviceId(uuid, context.address, context.eoj);
+      this.log.info("Adding existing accessory:", deviceId);
+      try {
+        await this.addAccessory(context.address, context.eoj, uuid);
+      } catch (err) {
+        // An unreachable device rejects while its properties are read; keep
+        // restoring the rest instead of losing the whole boot.
+        this.log.error("Failed to restore accessory", deviceId, err);
+      }
+    }
+  }
+
+  // Copies the address/EOJ that releases before 2.0 kept in their own JSON file
+  // into the accessory context, which Homebridge persists for us. This is a no-op
+  // once every accessory has been migrated.
+  private migrateLegacyAccessories(): void {
+    const pending = [...this.accessories.values()].filter((accessory) => getAccessoryContext(accessory) === null);
+    if (pending.length === 0) {
+      return;
+    }
+
+    const legacy = readLegacyStorage(this.api);
+    const migrated = pending.filter((accessory) => {
+      const context = legacy.get(accessory.UUID);
+      if (!context) {
+        return false;
+      }
+      setAccessoryContext(accessory, context);
+      return true;
+    });
+    if (migrated.length > 0) {
+      this.log.info("Migrated", migrated.length, "accessories from the legacy storage file");
+      this.api.updatePlatformAccessories(migrated);
     }
   }
 
@@ -173,10 +217,9 @@ export class ELPlatform implements DynamicPlatformPlugin {
   }
 
   private async addAccessory(address: string, eoj: EOJ, uuid: string): Promise<void> {
-    const registered = this.accessories.has(uuid);
+    const registered = this.accessories.get(uuid);
     const accessory =
-      this.accessories.get(uuid) ??
-      new this.api.platformAccessory(this.el.getClassName(eoj) ?? "ECHONET Lite Device", uuid);
+      registered ?? new this.api.platformAccessory(this.el.getClassName(eoj) ?? "ECHONET Lite Device", uuid);
 
     // The addAccessory may be called twice due to refreshing.
     if (!this.builtAccessories.has(uuid)) {
@@ -187,11 +230,17 @@ export class ELPlatform implements DynamicPlatformPlugin {
       accessory.on("identify", () => {});
     }
 
+    const previous = getAccessoryContext(accessory);
+    setAccessoryContext(accessory, { address, eoj });
+
     if (!registered) {
       this.log.info("Found new accessory:", formatDeviceId(uuid, address, eoj));
       this.accessories.set(uuid, accessory);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-      this.storage.set(uuid, { address, eoj });
+    } else if (previous?.address !== address) {
+      // The device answered from a new address; persist it for the next boot.
+      this.log.info("Updated cached address of", formatDeviceId(uuid, address, eoj), "was:", previous?.address);
+      this.api.updatePlatformAccessories([accessory]);
     }
   }
 }

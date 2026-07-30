@@ -50,7 +50,9 @@ export class LightAccessory {
     let brightness = 0;
     if (supportsBrightness) {
       try {
-        const level = (await el.getPropertyValue(address, eoj, EPC.ILLUMINANCE_LEVEL)).message.prop?.[0].buffer.readUInt8(0);
+        const level = (
+          await el.getPropertyValue(address, eoj, EPC.ILLUMINANCE_LEVEL)
+        ).message.prop?.[0].buffer.readUInt8(0);
         if (level != null) {
           brightness = level;
           platform.log.debug("Initialized brightness:", logId, level);
