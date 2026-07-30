@@ -12,12 +12,9 @@ export interface ELPlatformConfig extends PlatformConfig {
   enableRefreshSwitch?: boolean;
 }
 
-export interface PersistedAccessoryInfo {
+// Stored in accessory.context, which Homebridge serializes into its own accessory
+// cache. This is the only place the identity of a device is persisted.
+export interface ELAccessoryContext {
   address: string;
   eoj: EOJ;
-}
-
-export interface PersistedStorage {
-  // Keyed by accessory UUID.
-  accessories: Record<string, PersistedAccessoryInfo>;
 }
