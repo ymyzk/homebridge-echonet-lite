@@ -1,8 +1,7 @@
 import type { PlatformAccessory } from "homebridge";
 
-import type { EchonetLiteClient } from "../echonet-lite.js";
+import type { EchonetDevice } from "../echonet-device.js";
 import type { ELPlatform } from "../platform.js";
-import type { EOJ } from "../types.js";
 import { AirConditionerAccessory } from "./aircon.js";
 import { LightAccessory } from "./light.js";
 
@@ -11,15 +10,14 @@ import { LightAccessory } from "./light.js";
 export async function createAccessoryHandler(
   platform: ELPlatform,
   accessory: PlatformAccessory,
-  el: EchonetLiteClient,
-  address: string,
-  eoj: EOJ,
+  device: EchonetDevice,
 ): Promise<boolean> {
-  if (eoj[0] === 0x02 && (eoj[1] === 0x90 || eoj[1] === 0x91)) {
-    return (await LightAccessory.create(platform, accessory, el, address, eoj)) !== null;
+  const [classGroupCode, classCode] = device.eoj;
+  if (classGroupCode === 0x02 && (classCode === 0x90 || classCode === 0x91)) {
+    return (await LightAccessory.create(platform, accessory, device)) !== null;
   }
-  if (eoj[0] === 0x01 && eoj[1] === 0x30) {
-    AirConditionerAccessory.create(platform, accessory, el, address, eoj);
+  if (classGroupCode === 0x01 && classCode === 0x30) {
+    AirConditionerAccessory.create(platform, accessory, device);
     return true;
   }
   return false;
