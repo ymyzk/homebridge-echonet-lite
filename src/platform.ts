@@ -6,6 +6,7 @@ import { EchonetLiteClient } from "./echonet-lite.js";
 import { PLATFORM_NAME, PLUGIN_NAME } from "./settings.js";
 import { AccessoryStorage } from "./storage.js";
 import type { ELPlatformConfig, EOJ } from "./types.js";
+import { formatDeviceId } from "./utils.js";
 
 const DISCOVERY_TIMEOUT_MS = 10 * 1000;
 
@@ -38,7 +39,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
       return;
     }
 
-    this.log.info(`Finished initializing platform: ${this.config.name}`);
+    this.log.info("Finished initializing platform:", this.config.name);
     this.api.on("didFinishLaunching", () => void this.init());
   }
 
@@ -95,7 +96,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
     try {
       await this.el.init();
     } catch (err) {
-      this.log.error(`Error in init: ${err}`);
+      this.log.error("Error in init", err);
       return;
     }
     this.log.info("Initializing ECHONET Lite client");
@@ -114,7 +115,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
       for (const [uuid, accessory] of this.accessories) {
         const info = this.storage.get(uuid);
         if (info) {
-          this.log.info(`Adding ${info.address} ${info.eoj} ${uuid}`);
+          this.log.info("Adding existing accessory:", formatDeviceId(uuid, info.address, info.eoj));
           await this.addAccessory(info.address, info.eoj, uuid);
         } else {
           this.accessories.delete(uuid);
@@ -144,7 +145,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
       try {
         await this.addAccessory(address, eoj, uuid);
       } catch (err) {
-        this.log.error(`Failed to add accessory ${uuid} (${address} ${eoj}): ${err}`);
+        this.log.error("Failed to add accessory", formatDeviceId(uuid, address, eoj), err);
       }
     }
   }
@@ -183,7 +184,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
     }
 
     if (!registered) {
-      this.log.info(`Found new accessory: ${uuid}`);
+      this.log.info("Found new accessory:", formatDeviceId(uuid, address, eoj));
       this.accessories.set(uuid, accessory);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.storage.set(uuid, { address, eoj });

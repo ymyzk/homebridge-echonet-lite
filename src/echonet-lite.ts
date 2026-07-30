@@ -28,7 +28,7 @@ export class EchonetLiteClient {
         const udp = this.el.mELNet.udp;
         udp.on("close", () => this.log.info("UDP close"));
         udp.on("connect", () => this.log.info("UDP connect"));
-        udp.on("error", (err) => this.log.error(`UDP error: ${err}`));
+        udp.on("error", (err) => this.log.error("UDP error:", err));
         resolve();
       });
     });
@@ -38,7 +38,7 @@ export class EchonetLiteClient {
   startDiscovery(onDevice: (device: DiscoveredDevice) => void): void {
     this.el.startDiscovery((err, res) => {
       if (err) {
-        this.log.error(`Error in discovery: ${err}`);
+        this.log.error("Error in discovery:", err);
         return;
       }
       const eoj = res.device.eoj.filter((e) => e.length >= 3).map((e): EOJ => [e[0], e[1], e[2]]);
@@ -92,7 +92,7 @@ export class EchonetLiteClient {
         this.el.mELNet._addMembership();
         this.log.debug("Renewed multicast group membership");
       } catch (error) {
-        this.log.error(`Failed to renew multicast group membership: ${error}`);
+        this.log.error("Failed to renew multicast group membership:", error);
       }
     }, REJOIN_INTERVAL_MS);
     this.log.info("Started multicast group renewal timer");

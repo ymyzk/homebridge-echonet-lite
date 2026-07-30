@@ -40,7 +40,7 @@ export class AccessoryStorage {
     try {
       fs.writeFileSync(this.filePath, JSON.stringify(this.data));
     } catch (e) {
-      this.log.error(`Failed to write settings: ${e}`);
+      this.log.error("Failed to write settings:", e);
     }
   }
 }
