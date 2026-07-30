@@ -17,6 +17,7 @@ declare module "node-echonet-lite" {
     inf?: number[];
     set?: number[];
     get?: number[];
+    prop?: { epc: number; edt: ELPropertyData | null, buffer: Buffer }[];
     [key: string]: unknown;
   }
 
@@ -29,7 +30,7 @@ declare module "node-echonet-lite" {
     seoj: number[];
     deoj: number[];
     data: ELPropertyData | null;
-    prop?: { epc: number; edt: ELPropertyData | null }[];
+    prop?: { epc: number; edt: ELPropertyData | null, buffer: Buffer }[];
   }
 
   export interface ELResponse {

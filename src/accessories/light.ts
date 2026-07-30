@@ -40,6 +40,7 @@ export class LightAccessory {
       status = (await el.getPropertyValue(address, eoj, EPC.OPERATION_STATUS)).message.data?.status;
     } catch {
       // Treated as an unusable device below.
+      platform.log.warn("Failed to get initial status from", logId);
     }
     if (status == null) {
       return null;
@@ -49,15 +50,17 @@ export class LightAccessory {
     let brightness = 0;
     if (supportsBrightness) {
       try {
-        const level = (await el.getPropertyValue(address, eoj, EPC.ILLUMINANCE_LEVEL)).message.data?.level;
+        const level = (await el.getPropertyValue(address, eoj, EPC.ILLUMINANCE_LEVEL)).message.prop?.[0].buffer.readUInt8(0);
         if (level != null) {
           brightness = level;
-          platform.log.debug("Initialized brightness:", logId, brightness);
+          platform.log.debug("Initialized brightness:", logId, level);
         }
-      } catch {
+      } catch (error) {
         // Keep the default brightness.
+        platform.log.warn("Failed to get initial brightness from", logId, error);
       }
     }
+    platform.log.info("Initialized light accessory:", logId, "status:", status, "brightness:", brightness);
 
     return new LightAccessory(platform, accessory, el, address, eoj, supportsBrightness, status, brightness);
   }
@@ -112,7 +115,7 @@ export class LightAccessory {
           }
         })
         .onGet(() => {
-          this.platform.log.debug("Getting brightness from", this.logId);
+          this.platform.log.info("Getting brightness from", this.logId);
           // Refresh in the background; respond immediately with the cached value.
           void this.refreshBrightness();
           return this.brightness;
@@ -128,14 +131,14 @@ export class LightAccessory {
       this.platform.log.info("Received a notification from", this.logId);
 
       for (const p of prop ?? []) {
-        if (!p.edt) {
-          continue;
-        }
-        if (p.epc === 0x80 && p.edt.status != null) {
+        this.platform.log.info("Notification property:", this.logId, p.epc, p.edt);
+        if (p.epc === EPC.OPERATION_STATUS && p.edt?.status != null) {
           this.service.updateCharacteristic(platform.Characteristic.On, p.edt.status);
           this.platform.log.info("Received and updated status:", this.logId, p.edt.status);
-        } else if (p.epc === EPC.ILLUMINANCE_LEVEL && p.edt.level != null) {
-          this.updateBrightness(p.edt.level);
+        } else if (p.epc === EPC.ILLUMINANCE_LEVEL) {
+          const level = p.buffer.readUInt8(0);
+          this.platform.log.info("Received and updated brightness:", this.logId, level);
+          this.updateBrightness(level);
         }
       }
     });
