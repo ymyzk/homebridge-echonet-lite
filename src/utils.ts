@@ -6,6 +6,11 @@ export function toHex(value: number, width = 2): string {
   return `0x${value.toString(16).padStart(width, "0")}`;
 }
 
+// A property map (a list of EPCs) rendered as hex for logging, e.g. "[0x80, 0xb0]".
+export function formatProperties(properties: number[] | undefined): string {
+  return `[${(properties ?? []).map((epc) => toHex(epc)).join(", ")}]`;
+}
+
 // Packs the class group code, class code, and instance code into the single
 // hex value used on the wire, e.g. [0x01, 0x30, 0x01] -> "0x013001".
 export function formatEOJ(eoj: EOJ): string {

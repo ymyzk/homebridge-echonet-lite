@@ -71,6 +71,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
       return;
     }
 
+    this.log.info("Starting discovery");
     this.el.stopMembershipRenewal();
 
     this.el.startDiscovery((device) => void this.handleDiscoveredDevice(device.address, device.eoj));
@@ -128,6 +129,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
 
   private async handleDiscoveredDevice(address: string, eojList: EOJ[]): Promise<void> {
     for (const eoj of eojList) {
+      this.log.info("Discovered device:", formatDeviceId("", address, eoj));
       // Skip invalid devices.
       if (!this.el.getClassName(eoj)) {
         continue;
@@ -137,8 +139,10 @@ export class ELPlatform implements DynamicPlatformPlugin {
       try {
         // EPC 0x83: identification number, a stable unique ID when available.
         uid = (await this.el.getPropertyValue(address, eoj, 0x83)).message.data?.uid;
+        this.log.debug("UID for", formatDeviceId("", address, eoj), "is", uid);
       } catch {
         // Fall back to the address-based ID below.
+        this.log.warn("Failed to get UID for", formatDeviceId("", address, eoj));
       }
       uid ??= address + "|" + JSON.stringify(eoj);
       const uuid = this.api.hap.uuid.generate(uid);

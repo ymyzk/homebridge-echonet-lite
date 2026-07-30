@@ -3,7 +3,12 @@ import type { PlatformAccessory, Service } from "homebridge";
 import type { EchonetLiteClient } from "../echonet-lite.js";
 import type { ELPlatform } from "../platform.js";
 import type { EOJ } from "../types.js";
-import { formatDeviceId, toHex } from "../utils.js";
+import { formatDeviceId, formatProperties } from "../utils.js";
+
+const EPC = {
+  OPERATION_STATUS: 0x80,
+  ILLUMINANCE_LEVEL: 0xb0,
+} as const;
 
 // A general lighting (0x02/0x90) or mono functional lighting (0x02/0x91) device
 // exposed as a HomeKit Lightbulb.
@@ -23,12 +28,16 @@ export class LightAccessory {
     eoj: EOJ,
   ): Promise<LightAccessory | null> {
     const logId = formatDeviceId(accessory.UUID, address, eoj);
-    const properties = (await el.getPropertyMaps(address, eoj)).message.data?.set ?? [];
-    platform.log.info("Initializing a light accessory:", logId, properties.map((p) => toHex(p)).join(","));
+    platform.log.info("Initializing a light accessory:", logId);
+    const propertyMaps = (await el.getPropertyMaps(address, eoj)).message.data;
+    platform.log.debug("INF properties for", logId, formatProperties(propertyMaps?.inf));
+    platform.log.debug("Get properties for", logId, formatProperties(propertyMaps?.get));
+    platform.log.debug("Set properties for", logId, formatProperties(propertyMaps?.set));
+    const properties = propertyMaps?.set ?? [];
 
     let status: boolean | undefined;
     try {
-      status = (await el.getPropertyValue(address, eoj, 0x80)).message.data?.status;
+      status = (await el.getPropertyValue(address, eoj, EPC.OPERATION_STATUS)).message.data?.status;
     } catch {
       // Treated as an unusable device below.
     }
@@ -36,11 +45,11 @@ export class LightAccessory {
       return null;
     }
 
-    const supportsBrightness = properties.includes(0xb0);
+    const supportsBrightness = properties.includes(EPC.ILLUMINANCE_LEVEL);
     let brightness = 0;
     if (supportsBrightness) {
       try {
-        const level = (await el.getPropertyValue(address, eoj, 0xb0)).message.data?.level;
+        const level = (await el.getPropertyValue(address, eoj, EPC.ILLUMINANCE_LEVEL)).message.data?.level;
         if (level != null) {
           brightness = level;
           platform.log.debug("Initialized brightness:", logId, brightness);
@@ -97,7 +106,7 @@ export class LightAccessory {
           if (value !== this.brightness) {
             this.platform.log.debug("Setting brightness", value, "for", this.logId);
             this.updateBrightness(value as number);
-            await this.el.setPropertyValue(this.address, this.eoj, 0xb0, { level: value as number });
+            await this.el.setPropertyValue(this.address, this.eoj, EPC.ILLUMINANCE_LEVEL, { level: value as number });
           } else {
             this.platform.log.debug("Setting brightness no-op", value, "for", this.logId);
           }
@@ -125,7 +134,7 @@ export class LightAccessory {
         if (p.epc === 0x80 && p.edt.status != null) {
           this.service.updateCharacteristic(platform.Characteristic.On, p.edt.status);
           this.platform.log.info("Received and updated status:", this.logId, p.edt.status);
-        } else if (p.epc === 0xb0 && p.edt.level != null) {
+        } else if (p.epc === EPC.ILLUMINANCE_LEVEL && p.edt.level != null) {
           this.updateBrightness(p.edt.level);
         }
       }
@@ -139,7 +148,7 @@ export class LightAccessory {
 
   private async refreshBrightness(): Promise<void> {
     try {
-      const level = (await this.el.getPropertyValue(this.address, this.eoj, 0xb0)).message.data?.level;
+      const level = (await this.el.getPropertyValue(this.address, this.eoj, EPC.ILLUMINANCE_LEVEL)).message.data?.level;
       this.platform.log.debug("Got brightness:", this.logId, level);
       if (level != null) {
         this.updateBrightness(level);

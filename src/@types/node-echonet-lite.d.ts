@@ -13,6 +13,8 @@ declare module "node-echonet-lite" {
     temperature?: number;
     compressor?: boolean;
     uid?: string;
+    // Property maps returned by getPropertyMaps().
+    inf?: number[];
     set?: number[];
     get?: number[];
     [key: string]: unknown;
