@@ -3,6 +3,7 @@ import type { PlatformAccessory } from "homebridge";
 import type { Property, WritableProperty } from "../echonet/codec.js";
 import type { DeviceProfile, EchonetDevice, PropertyMaps } from "../echonet/device.js";
 import { manufacturerName } from "../echonet/manufacturer.js";
+import type { EPC } from "../echonet/types.js";
 import { formatProperties } from "../echonet/utils.js";
 import type { ELPlatform } from "../platform.js";
 import { applyAccessoryInformation } from "./accessory-information.js";
@@ -98,9 +99,13 @@ export class ProfileLoader implements AccessoryHandler {
     const { log } = this.platform;
     const { logId } = this.device;
 
-    log.debug("INF properties for", logId, formatProperties(maps.inf));
-    log.debug("Get properties for", logId, formatProperties(maps.get));
-    log.debug("Set properties for", logId, formatProperties(maps.set));
+    // Devices list their maps in whatever order they please; sorting makes the
+    // lines comparable between devices and between reads of the same device.
+    const sorted = (epcs: EPC[]): string => formatProperties([...epcs].sort((a, b) => a - b));
+
+    log.debug("INF properties for", logId, sorted(maps.inf));
+    log.debug("Get properties for", logId, sorted(maps.get));
+    log.debug("Set properties for", logId, sorted(maps.set));
 
     const { standardVersion: version } = info;
     const summary = [
