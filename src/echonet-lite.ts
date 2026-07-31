@@ -14,6 +14,10 @@ const REJOIN_INTERVAL_MS = 4 * 60 * 1000;
 // Matches the timeout Bobolink applied to queued tasks previously, so an
 // unresponsive device fails in the same time as before.
 const REQUEST_TIMEOUT_MS = 15 * 1000;
+// How many get requests may be in flight at once. High enough that a boot with
+// many devices is not serialized, but some networks and devices cope badly with
+// a burst this size, hence the config option.
+export const DEFAULT_GET_CONCURRENCY = 50;
 
 // This plugin acts as a controller object.
 const CONTROLLER_EOJ = "05ff01";
@@ -57,13 +61,31 @@ function epcKey(epc: number): string {
   return epc.toString(16).padStart(2, "0");
 }
 
+// config.json is not validated against config.schema.json when it is edited by
+// hand, so a value that would stall or flood the get queue is rejected here.
+function resolveGetConcurrency(log: Logging, value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_GET_CONCURRENCY;
+  }
+  if (!Number.isInteger(value) || value < 1) {
+    log.warn("Ignoring invalid getConcurrency:", value, "- using", DEFAULT_GET_CONCURRENCY);
+    return DEFAULT_GET_CONCURRENCY;
+  }
+  return value;
+}
+
+export interface EchonetLiteClientOptions {
+  // Maximum number of get requests in flight at once.
+  getConcurrency?: number;
+}
+
 // Typed, promisified wrapper around echonet-lite. The library is fire-and-forget
 // with a single callback for every inbound packet, so matching a response to its
 // request happens here. Get/set requests are funneled through queues to avoid
 // flooding devices, and everything below is raw EDT: interpreting those bytes is
 // the codec's job.
 export class EchonetLiteClient {
-  private readonly getQueue = new Bobolink({ concurrency: 50 });
+  private readonly getQueue: Bobolink;
   private readonly setQueue = new Bobolink({ concurrency: 1 });
   private readonly pending = new Map<string, Pending>();
   private readonly notifyListeners = new Set<(notification: Notification) => void>();
@@ -74,7 +96,12 @@ export class EchonetLiteClient {
   // can be renewed without reaching for the library's module-level globals.
   private socket: Socket | null = null;
 
-  constructor(private readonly log: Logging) {}
+  constructor(
+    private readonly log: Logging,
+    options: EchonetLiteClientOptions = {},
+  ) {
+    this.getQueue = new Bobolink({ concurrency: resolveGetConcurrency(log, options.getConcurrency) });
+  }
 
   async init(): Promise<void> {
     if (this.socket !== null) {

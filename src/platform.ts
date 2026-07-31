@@ -30,7 +30,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = api.hap.Service;
     this.Characteristic = api.hap.Characteristic;
-    this.client = new EchonetLiteClient(log);
+    this.client = new EchonetLiteClient(log, { getConcurrency: config?.getConcurrency });
     this.discovery = new DiscoveryController(log, this.client, (objects) => void this.handleDiscoveredObjects(objects));
 
     if (!this.config) {

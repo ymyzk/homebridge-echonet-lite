@@ -12,6 +12,9 @@ export interface DiscoveredObjects {
 
 export interface ELPlatformConfig extends PlatformConfig {
   enableRefreshSwitch?: boolean;
+  // Maximum number of property read requests in flight at once. Unset means the
+  // client's default.
+  getConcurrency?: number;
 }
 
 // Stored in accessory.context, which Homebridge serializes into its own accessory

@@ -35,6 +35,7 @@ configure this plugin from its settings form. Otherwise, add a platform block to
 | `platform`            | string  | —              | Required. Must be `ELPlatform`.                                                                                                                                                                                                              |
 | `name`                | string  | `ECHONET Lite` | Name shown in the Homebridge log for this platform.                                                                                                                                                                                          |
 | `enableRefreshSwitch` | boolean | `false`        | Expose a "Refresh ECHONET Lite" switch in HomeKit. Turning it on runs a 10-second discovery scan for ECHONET Lite devices on the local network, then switches itself back off. Disabling this option removes the switch on the next restart. |
+| `getConcurrency`      | integer | `50`           | Maximum number of property read requests in flight at once. Lower this if devices time out or answer unreliably when many requests are sent together; raise it to speed up a restart with many devices.                                      |
 
 ## Development
 

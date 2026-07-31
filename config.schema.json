@@ -18,6 +18,13 @@
         "type": "boolean",
         "default": false,
         "description": "Expose a \"Refresh ECHONET Lite\" switch in HomeKit. Turning it on runs a 10-second discovery scan for ECHONET Lite devices on the local network, then switches itself back off. Disabling this option removes the switch on the next restart."
+      },
+      "getConcurrency": {
+        "title": "Get Request Concurrency",
+        "type": "integer",
+        "default": 50,
+        "minimum": 1,
+        "description": "Maximum number of property read requests in flight at once. Lower this if devices time out or answer unreliably when many requests are sent together; raise it to speed up a restart with many devices."
       }
     }
   }

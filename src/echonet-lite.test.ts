@@ -7,6 +7,7 @@ import type { Logging } from "homebridge";
 
 import { OperationStatus, TargetTemperature } from "./codec.js";
 import { EchonetLiteClient } from "./echonet-lite.js";
+import type { EchonetLiteClientOptions } from "./echonet-lite.js";
 import type { EOJ } from "./types.js";
 
 const DEVICE = "192.168.1.50";
@@ -50,7 +51,10 @@ const rinfo = (address = DEVICE): Rinfo => ({ address, family: "IPv4", port: 361
 // Drives the client with the network stubbed out: EL.initialize hands back the
 // userfunc so a test can deliver whatever frame it likes, and EL.sendDetails
 // records requests instead of putting them on the wire.
-async function createClient(): Promise<{
+async function createClient(
+  options: EchonetLiteClientOptions = {},
+  log: Logging = noopLog,
+): Promise<{
   client: EchonetLiteClient;
   deliver: UserFunc;
   sent: { ip: unknown; esv: string; details: Record<string, string> }[];
@@ -77,7 +81,7 @@ async function createClient(): Promise<{
   mock.method(EL, "release", () => {});
   mock.method(EL, "search", () => {});
 
-  const client = new EchonetLiteClient(noopLog);
+  const client = new EchonetLiteClient(log, options);
   await client.init();
   assert.ok(deliver, "initialize should have been given a userfunc");
   return { client, deliver, sent, socket };
@@ -266,6 +270,44 @@ describe("EchonetLiteClient", () => {
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
     client.close();
     await assert.rejects(pending, /closed/);
+  });
+
+  it("holds back gets beyond the configured concurrency", async () => {
+    const { client, deliver, sent } = await createClient({ getConcurrency: 1 });
+    const first = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    const second = client.getProperty(DEVICE, AIRCON, TargetTemperature);
+
+    // The second request is still queued, so nothing went out for it yet.
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0].details, { "80": "" });
+
+    deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "30" } }), null);
+    assert.equal(await first, true);
+
+    // Freeing the slot releases the queued request.
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent[1].details, { b3: "" });
+    deliver(rinfo(), frame({ TID: "0002", DETAILs: { b3: "19" } }), null);
+    assert.equal(await second, 25);
+    client.close();
+  });
+
+  it("falls back to the default concurrency when the configured value is unusable", async () => {
+    const warnings: unknown[][] = [];
+    const log = { ...noopLog, warn: (...args: unknown[]) => warnings.push(args) } as unknown as Logging;
+    const { client, sent } = await createClient({ getConcurrency: 0 }, log);
+
+    const first = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    const second = client.getProperty(DEVICE, AIRCON, TargetTemperature);
+
+    // A concurrency of 0 would have stalled the queue outright.
+    assert.equal(sent.length, 2);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0].join(" "), /Ignoring invalid getConcurrency/);
+
+    client.close();
+    await assert.rejects(first, /closed/);
+    await assert.rejects(second, /closed/);
   });
 
   it("refuses a second initialize, which would replace the singleton's sockets", async () => {
