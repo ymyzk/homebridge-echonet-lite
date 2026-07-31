@@ -1,9 +1,9 @@
 import type { Socket } from "node:dgram";
 
-import Bobolink from "bobolink";
 import EL from "echonet-lite";
 import type { ELData, Rinfo } from "echonet-lite";
 import type { Logging } from "homebridge";
+import pLimit from "p-limit";
 
 import type { Property, WritableProperty } from "./codec.js";
 import { expandPropertyMap } from "./codec.js";
@@ -11,8 +11,8 @@ import type { DiscoveredObjects, EOJ } from "./types.js";
 import { formatEOJ } from "./utils.js";
 
 const REJOIN_INTERVAL_MS = 4 * 60 * 1000;
-// Matches the timeout Bobolink applied to queued tasks previously, so an
-// unresponsive device fails in the same time as before.
+// How long a request waits for its response before it is given up on, so an
+// unresponsive device does not hold a queue slot forever.
 const REQUEST_TIMEOUT_MS = 15 * 1000;
 
 // This plugin acts as a controller object.
@@ -63,8 +63,8 @@ function epcKey(epc: number): string {
 // flooding devices, and everything below is raw EDT: interpreting those bytes is
 // the codec's job.
 export class EchonetLiteClient {
-  private readonly getQueue = new Bobolink({ concurrency: 50 });
-  private readonly setQueue = new Bobolink({ concurrency: 1 });
+  private readonly getQueue = pLimit(50);
+  private readonly setQueue = pLimit(1);
   private readonly pending = new Map<string, Pending>();
   private readonly notifyListeners = new Set<(notification: Notification) => void>();
   private discoveryListener: ((objects: DiscoveredObjects) => void) | null = null;
@@ -132,9 +132,7 @@ export class EchonetLiteClient {
   // no usable value for it, which callers treat as "unavailable" rather than as
   // an error.
   async getProperty<T>(address: string, eoj: EOJ, property: Property<T>): Promise<T | null> {
-    const details = await this.runQueued(this.getQueue, () =>
-      this.request(address, eoj, EL.GET, { [epcKey(property.epc)]: "" }),
-    );
+    const details = await this.getQueue(() => this.request(address, eoj, EL.GET, { [epcKey(property.epc)]: "" }));
     const edt = details[epcKey(property.epc)];
     if (edt == null || edt === "") {
       return null;
@@ -144,11 +142,11 @@ export class EchonetLiteClient {
 
   async setProperty<T>(address: string, eoj: EOJ, property: WritableProperty<T>, value: T): Promise<void> {
     const edt = property.encode(value).toString("hex");
-    await this.runQueued(this.setQueue, () => this.request(address, eoj, EL.SETC, { [epcKey(property.epc)]: edt }));
+    await this.setQueue(() => this.request(address, eoj, EL.SETC, { [epcKey(property.epc)]: edt }));
   }
 
   async getPropertyMaps(address: string, eoj: EOJ): Promise<PropertyMaps> {
-    const details = await this.runQueued(this.getQueue, () =>
+    const details = await this.getQueue(() =>
       this.request(address, eoj, EL.GET, Object.fromEntries(PROPERTY_MAP_EPCS.map((epc) => [epc, ""]))),
     );
     const mapOf = (epc: string) => {
@@ -338,13 +336,5 @@ export class EchonetLiteClient {
     }
     this.log.debug("Discovered", eojList.length, "object(s) at", rinfo.address);
     this.discoveryListener?.({ address: rinfo.address, eojList });
-  }
-
-  private async runQueued<T>(queue: Bobolink, task: () => Promise<T>): Promise<T> {
-    const state = await queue.put(task);
-    if (state.err !== undefined || state.res === null) {
-      throw state.err ?? new Error("ECHONET Lite request failed");
-    }
-    return state.res;
   }
 }

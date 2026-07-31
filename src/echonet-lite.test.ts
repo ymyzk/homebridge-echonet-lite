@@ -48,6 +48,12 @@ function frame(overrides: Partial<ELData>): ELData {
 
 const rinfo = (address = DEVICE): Rinfo => ({ address, family: "IPv4", port: 3610, size: 0 });
 
+// The request queues dispatch their task on a microtask, so a request that has
+// been started but not awaited has not reached EL.sendDetails yet. setImmediate
+// runs after the microtask queue drains, which puts the request on the (stubbed)
+// wire before a test asserts on it or delivers its response.
+const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
 // Drives the client with the network stubbed out: EL.initialize hands back the
 // userfunc so a test can deliver whatever frame it likes, and EL.sendDetails
 // records requests instead of putting them on the wire.
@@ -96,6 +102,7 @@ describe("EchonetLiteClient", () => {
   it("resolves a get with the decoded property", async () => {
     const { client, deliver, sent } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    await flush();
 
     expect(sent).toHaveLength(1);
     expect(sent[0].esv).toBe(EL.GET);
@@ -109,6 +116,7 @@ describe("EchonetLiteClient", () => {
   it("resolves to null when the device answers with no data for the property", async () => {
     const { client, deliver } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, TargetTemperature);
+    await flush();
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { b3: "" } }), null);
     expect(await pending).toBeNull();
     client.close();
@@ -119,6 +127,7 @@ describe("EchonetLiteClient", () => {
     // the same transaction ID and consumed the pending entry.
     const { client, deliver } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    await flush();
 
     deliver(
       rinfo(),
@@ -135,6 +144,7 @@ describe("EchonetLiteClient", () => {
   it("ignores a response from a different object with the same transaction ID", async () => {
     const { client, deliver } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    await flush();
 
     deliver(rinfo(), frame({ TID: "0001", SEOJ: "029001", DETAILs: { "80": "30" } }), null);
     deliver(rinfo(), frame({ TID: "0001", SEOJ: "013001", DETAILs: { "80": "31" } }), null);
@@ -146,6 +156,7 @@ describe("EchonetLiteClient", () => {
   it("ignores a response from a different address with the same transaction ID", async () => {
     const { client, deliver } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    await flush();
 
     deliver(rinfo("192.168.1.99"), frame({ TID: "0001", DETAILs: { "80": "30" } }), null);
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "31" } }), null);
@@ -157,6 +168,7 @@ describe("EchonetLiteClient", () => {
   it("rejects when the device answers with an error service code", async () => {
     const { client, deliver } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    await flush();
 
     deliver(rinfo(), frame({ TID: "0001", ESV: EL.GET_SNA, DETAILs: { "80": "" } }), null);
     await expect(pending).rejects.toThrow(/rejected the request/);
@@ -166,6 +178,7 @@ describe("EchonetLiteClient", () => {
   it("encodes a set and waits for the response", async () => {
     const { client, deliver, sent } = await createClient();
     const pending = client.setProperty(DEVICE, AIRCON, TargetTemperature, 25);
+    await flush();
 
     expect(sent[0].esv).toBe(EL.SETC);
     expect(sent[0].details).toEqual({ b3: "19" });
@@ -178,6 +191,7 @@ describe("EchonetLiteClient", () => {
   it("expands property maps into EPC lists", async () => {
     const { client, deliver, sent } = await createClient();
     const pending = client.getPropertyMaps(DEVICE, AIRCON);
+    await flush();
 
     expect(sent[0].details).toEqual({ "9d": "", "9e": "", "9f": "" });
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { "9d": "0280b0", "9e": "01b3", "9f": "0380b0bb" } }), null);
@@ -271,6 +285,7 @@ describe("EchonetLiteClient", () => {
   it("rejects everything still in flight when closed", async () => {
     const { client } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    await flush();
     client.close();
     await expect(pending).rejects.toThrow(/closed/);
   });
