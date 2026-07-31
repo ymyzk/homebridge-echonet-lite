@@ -92,14 +92,14 @@ export class LightAccessory {
     this.service = accessory.getService(platform.Service.Lightbulb) ?? accessory.addService(platform.Service.Lightbulb);
     this.lastStatus = initialStatus;
 
-    this.setupPower(initialStatus);
+    this.setUpPower(initialStatus);
     if (supportsBrightness) {
-      this.setupBrightness(initialBrightness);
+      this.setUpBrightness(initialBrightness);
     }
     this.subscribeToNotifications();
   }
 
-  private setupPower(initialStatus: boolean): void {
+  private setUpPower(initialStatus: boolean): void {
     this.service.updateCharacteristic(this.platform.Characteristic.On, initialStatus);
     this.service
       .getCharacteristic(this.platform.Characteristic.On)
@@ -124,7 +124,7 @@ export class LightAccessory {
       });
   }
 
-  private setupBrightness(initialBrightness: number): void {
+  private setUpBrightness(initialBrightness: number): void {
     this.updateBrightness(initialBrightness);
     this.service
       .getCharacteristic(this.platform.Characteristic.Brightness)

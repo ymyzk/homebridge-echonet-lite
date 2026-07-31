@@ -40,7 +40,7 @@ export function setUpRefreshSwitch(
   const service = accessory.getService(Service.Switch) ?? accessory.addService(Service.Switch);
   service
     .getCharacteristic(Characteristic.On)
-    .onGet(() => discovery.discovering)
+    .onGet(() => discovery.isDiscovering)
     .onSet((value) => {
       if (value) {
         discovery.start();
@@ -49,7 +49,5 @@ export function setUpRefreshSwitch(
       }
     });
 
-  // A scan ends on its own once it times out, so the switch follows the
-  // controller instead of only its own writes.
   discovery.onStateChange((isDiscovering) => service.updateCharacteristic(Characteristic.On, isDiscovering));
 }

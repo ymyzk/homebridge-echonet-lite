@@ -3,7 +3,7 @@ import type { Logging } from "homebridge";
 import EchonetLite from "node-echonet-lite";
 import type { ELPropertyData, ELResponse } from "node-echonet-lite";
 
-import type { DiscoveredDevice, EOJ } from "./types.js";
+import type { DiscoveredObjects, EOJ } from "./types.js";
 
 const REJOIN_INTERVAL_MS = 4 * 60 * 1000;
 
@@ -34,15 +34,15 @@ export class EchonetLiteClient {
     });
   }
 
-  // Starts a discovery scan. `onDevice` is invoked once per responding node.
-  startDiscovery(onDevice: (device: DiscoveredDevice) => void): void {
+  // Starts a discovery scan. `onObjects` is invoked once per responding address.
+  startDiscovery(onObjects: (objects: DiscoveredObjects) => void): void {
     this.el.startDiscovery((err, res) => {
       if (err) {
         this.log.error("Error in discovery:", err);
         return;
       }
-      const eoj = res.device.eoj.filter((e) => e.length >= 3).map((e): EOJ => [e[0], e[1], e[2]]);
-      onDevice({ address: res.device.address, eoj });
+      const eojList = res.device.eoj.filter((e) => e.length >= 3).map((e): EOJ => [e[0], e[1], e[2]]);
+      onObjects({ address: res.device.address, eojList });
     });
   }
 
