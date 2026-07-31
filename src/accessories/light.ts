@@ -138,10 +138,18 @@ export class LightAccessory {
         this.updateBrightness(level);
         await this.device.set(LIGHT_EPC.ILLUMINANCE_LEVEL, { level });
       })
-      .onGet(() => {
+      .onGet(async () => {
         this.log.debug("Getting brightness from", this.device.logId);
-        // Refresh in the background; respond immediately with the cached value.
-        void this.refreshBrightness();
+        try {
+          const res = await this.device.get(LIGHT_EPC.ILLUMINANCE_LEVEL);
+          const level = illuminanceLevelOf(res.message.prop?.[0]?.buffer);
+          this.log.debug("Got brightness:", this.device.logId, level);
+          if (level != null) {
+            this.updateBrightness(level);
+          }
+        } catch (err) {
+          this.log.error("Failed to get brightness from", this.device.logId, err);
+        }
         return this.brightness;
       });
   }
@@ -177,17 +185,5 @@ export class LightAccessory {
   private updateBrightness(value: number): void {
     this.brightness = value;
     this.service.updateCharacteristic(this.Characteristic.Brightness, value);
-  }
-
-  private async refreshBrightness(): Promise<void> {
-    try {
-      const level = illuminanceLevelOf((await this.device.get(LIGHT_EPC.ILLUMINANCE_LEVEL)).message.prop?.[0]?.buffer);
-      this.log.debug("Got brightness:", this.device.logId, level);
-      if (level != null) {
-        this.updateBrightness(level);
-      }
-    } catch (err) {
-      this.log.error("Failed to get brightness from", this.device.logId, err);
-    }
   }
 }
