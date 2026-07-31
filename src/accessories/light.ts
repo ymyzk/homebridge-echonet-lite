@@ -1,4 +1,4 @@
-import type { Logging, PlatformAccessory, Service } from "homebridge";
+import type { Characteristic, Logging, PlatformAccessory, Service } from "homebridge";
 
 import type { EchonetDevice } from "../echonet-device.js";
 import { LIGHT_EPC, SUPER_EPC } from "../epc.js";
@@ -49,6 +49,7 @@ async function readBrightness(log: Logging, device: EchonetDevice): Promise<numb
 // exposed as a HomeKit Lightbulb.
 export class LightAccessory {
   private readonly service: Service;
+  private readonly Characteristic: typeof Characteristic;
   private readonly log: Logging;
   private status = false;
   private brightness = 0;
@@ -77,13 +78,14 @@ export class LightAccessory {
   }
 
   private constructor(
-    private readonly platform: ELPlatform,
+    platform: ELPlatform,
     accessory: PlatformAccessory,
     private readonly device: EchonetDevice,
     supportsBrightness: boolean,
     initialStatus: boolean,
     initialBrightness: number,
   ) {
+    this.Characteristic = platform.Characteristic;
     this.log = platform.log;
     this.service = accessory.getService(platform.Service.Lightbulb) ?? accessory.addService(platform.Service.Lightbulb);
 
@@ -97,7 +99,7 @@ export class LightAccessory {
   private setUpPower(initialStatus: boolean): void {
     this.updateStatus(initialStatus);
     this.service
-      .getCharacteristic(this.platform.Characteristic.On)
+      .getCharacteristic(this.Characteristic.On)
       .onSet(async (value) => {
         const status = value as boolean;
         await this.device.set(SUPER_EPC.OPERATION_STATUS, { status });
@@ -122,7 +124,7 @@ export class LightAccessory {
   private setUpBrightness(initialBrightness: number): void {
     this.updateBrightness(initialBrightness);
     this.service
-      .getCharacteristic(this.platform.Characteristic.Brightness)
+      .getCharacteristic(this.Characteristic.Brightness)
       .onSet(async (value) => {
         const level = value as number;
         if (level === this.brightness) {
@@ -166,12 +168,12 @@ export class LightAccessory {
 
   private updateStatus(value: boolean): void {
     this.status = value;
-    this.service.updateCharacteristic(this.platform.Characteristic.On, value);
+    this.service.updateCharacteristic(this.Characteristic.On, value);
   }
 
   private updateBrightness(value: number): void {
     this.brightness = value;
-    this.service.updateCharacteristic(this.platform.Characteristic.Brightness, value);
+    this.service.updateCharacteristic(this.Characteristic.Brightness, value);
   }
 
   private async refreshBrightness(): Promise<void> {
