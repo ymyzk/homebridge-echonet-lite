@@ -6,15 +6,35 @@ import {
   IdentificationNumber,
   IlluminanceLevel,
   InfPropertyMap,
+  ManufacturerCode,
   OperationStatus,
+  ProductCode,
   RoomTemperature,
   SetPropertyMap,
+  StandardVersionInformation,
   TargetTemperature,
   expandPropertyMap,
   write,
 } from "./codec.js";
 
 const hex = (value: string) => Buffer.from(value, "hex");
+
+describe("StandardVersionInformation", () => {
+  it("reads the release letter and the revision, ignoring the unused bytes", () => {
+    expect(StandardVersionInformation.decode(hex("00005001"))).toEqual({ release: "P", revision: 1 });
+    expect(StandardVersionInformation.decode(hex("00004100"))).toEqual({ release: "A", revision: 0 });
+  });
+
+  it("reads from EPC 0x82", () => {
+    expect(StandardVersionInformation.epc).toBe(0x82);
+  });
+
+  it("returns null unless the EDT is exactly four bytes", () => {
+    expect(StandardVersionInformation.decode(hex(""))).toBeNull();
+    expect(StandardVersionInformation.decode(hex("000050"))).toBeNull();
+    expect(StandardVersionInformation.decode(hex("0000500100"))).toBeNull();
+  });
+});
 
 describe("IdentificationNumber", () => {
   // The accessory UUID is derived from this string. These expectations encode
@@ -37,6 +57,54 @@ describe("IdentificationNumber", () => {
 
   it("returns null when there is nothing past the manufacturer code", () => {
     expect(IdentificationNumber.decode(hex("fe000077"))).toBeNull();
+  });
+});
+
+describe("ManufacturerCode", () => {
+  it("reads the three bytes as one big-endian number", () => {
+    expect(ManufacturerCode.decode(hex("00000b"))).toBe(0x00000b);
+    expect(ManufacturerCode.decode(hex("000077"))).toBe(0x000077);
+    // Byte order matters: little-endian would read this one as 0x332211.
+    expect(ManufacturerCode.decode(hex("112233"))).toBe(0x112233);
+  });
+
+  it("reads from EPC 0x8A", () => {
+    expect(ManufacturerCode.epc).toBe(0x8a);
+  });
+
+  it("returns null unless the EDT is exactly three bytes", () => {
+    expect(ManufacturerCode.decode(hex(""))).toBeNull();
+    expect(ManufacturerCode.decode(hex("0000"))).toBeNull();
+    expect(ManufacturerCode.decode(hex("00000b00"))).toBeNull();
+  });
+});
+
+describe("ProductCode", () => {
+  // The spec fixes the field at 12 bytes, so a shorter code arrives padded.
+  const padded = (value: string) => Buffer.concat([Buffer.from(value, "ascii")], 12);
+
+  it("strips the padding, whether it is 0x00 or spaces", () => {
+    expect(ProductCode.decode(padded("HEM-GW01"))).toBe("HEM-GW01");
+    expect(ProductCode.decode(Buffer.from("ABC" + " ".repeat(9), "ascii"))).toBe("ABC");
+  });
+
+  it("keeps a code that fills the whole field", () => {
+    expect(ProductCode.decode(padded("ABCDEFGHIJKL"))).toBe("ABCDEFGHIJKL");
+  });
+
+  it("reads from EPC 0x8C", () => {
+    expect(ProductCode.epc).toBe(0x8c);
+  });
+
+  it("returns null when the field is nothing but padding", () => {
+    expect(ProductCode.decode(padded(""))).toBeNull();
+    expect(ProductCode.decode(Buffer.from(" ".repeat(12), "ascii"))).toBeNull();
+  });
+
+  it("returns null unless the EDT is exactly twelve bytes", () => {
+    expect(ProductCode.decode(hex(""))).toBeNull();
+    expect(ProductCode.decode(Buffer.from("ABC", "ascii"))).toBeNull();
+    expect(ProductCode.decode(Buffer.concat([padded("ABC"), hex("00")]))).toBeNull();
   });
 });
 
