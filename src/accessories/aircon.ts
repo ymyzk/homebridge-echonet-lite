@@ -1,19 +1,8 @@
 import type { CharacteristicValue, PlatformAccessory, Service } from "homebridge";
-import type { ELPropertyData, ELResponse } from "node-echonet-lite";
 
 import type { EchonetDevice } from "../echonet-device.js";
 import { AIRCON_EPC, AIRCON_MODE, SUPER_EPC } from "../epc.js";
 import type { ELPlatform } from "../platform.js";
-
-// Unwraps the property payload, throwing when the device returned an empty
-// response so callers' catch-based fallbacks kick in.
-function requireData(res: ELResponse): ELPropertyData {
-  const data = res.message.data;
-  if (data == null) {
-    throw new Error("Empty response data");
-  }
-  return data;
-}
 
 // A home air conditioner (0x01/0x30) exposed as a HomeKit HeaterCooler.
 export class AirConditionerAccessory {
@@ -36,20 +25,20 @@ export class AirConditionerAccessory {
         await device.set(SUPER_EPC.OPERATION_STATUS, { status: value !== 0 });
       })
       .onGet(async () => {
-        return requireData(await device.get(SUPER_EPC.OPERATION_STATUS)).status ?? false;
+        return (await device.getData(SUPER_EPC.OPERATION_STATUS)).status ?? false;
       });
 
     this.service.getCharacteristic(Characteristic.CurrentHeaterCoolerState).onGet(async () => {
       try {
-        const { status } = requireData(await device.get(SUPER_EPC.OPERATION_STATUS));
+        const { status } = await device.getData(SUPER_EPC.OPERATION_STATUS);
         if (!status) {
           return Characteristic.CurrentHeaterCoolerState.INACTIVE;
         }
-        const { compressor } = requireData(await device.get(AIRCON_EPC.COMPRESSOR_STATUS));
+        const { compressor } = await device.getData(AIRCON_EPC.COMPRESSOR_STATUS);
         if (!compressor) {
           return Characteristic.CurrentHeaterCoolerState.IDLE;
         }
-        const { mode } = requireData(await device.get(AIRCON_EPC.OPERATION_MODE));
+        const { mode } = await device.getData(AIRCON_EPC.OPERATION_MODE);
         return mode === AIRCON_MODE.COOL
           ? Characteristic.CurrentHeaterCoolerState.COOLING
           : Characteristic.CurrentHeaterCoolerState.HEATING;
@@ -73,9 +62,9 @@ export class AirConditionerAccessory {
       })
       .onGet(async () => {
         let state: CharacteristicValue = Characteristic.TargetHeaterCoolerState.AUTO;
-        const { status } = requireData(await device.get(SUPER_EPC.OPERATION_STATUS));
+        const { status } = await device.getData(SUPER_EPC.OPERATION_STATUS);
         if (status) {
-          const { mode } = requireData(await device.get(AIRCON_EPC.OPERATION_MODE));
+          const { mode } = await device.getData(AIRCON_EPC.OPERATION_MODE);
           if (mode === AIRCON_MODE.COOL) {
             state = Characteristic.TargetHeaterCoolerState.COOL;
           } else if (mode === AIRCON_MODE.HEAT) {
@@ -90,7 +79,7 @@ export class AirConditionerAccessory {
     };
     const temperatureGetter = (epc: number) => async () => {
       try {
-        const { temperature } = requireData(await device.get(epc));
+        const { temperature } = await device.getData(epc);
         return temperature ?? 0;
       } catch (err) {
         // Some air conditioners do not have temperature sensor, reporting error

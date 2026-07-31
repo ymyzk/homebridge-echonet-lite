@@ -160,7 +160,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
       try {
         // The accessory UUID is derived from this, so an accessory survives a
         // change of address.
-        uid = (await probe.get(SUPER_EPC.IDENTIFICATION_NUMBER)).message.data?.uid;
+        uid = (await probe.getData(SUPER_EPC.IDENTIFICATION_NUMBER)).uid;
         this.log.debug("UID for", probe.logId, "is", uid);
       } catch {
         // Fall back to the address-based ID below.

@@ -1,23 +1,19 @@
-import type { Logging, PlatformAccessory, Service } from "homebridge";
-import type { ELResponse } from "node-echonet-lite";
+import type { Characteristic, Logging, PlatformAccessory, Service } from "homebridge";
 
 import type { EchonetDevice } from "../echonet-device.js";
 import { LIGHT_EPC, SUPER_EPC } from "../epc.js";
 import type { ELPlatform } from "../platform.js";
-import { formatProperties } from "../utils.js";
+import { formatProperties, toHex } from "../utils.js";
 
 // The illuminance level is read from the raw property buffer: some devices
 // answer with an EDT that node-echonet-lite does not decode into `data.level`.
-function parseIlluminanceLevel(buffer: Buffer | undefined): number | null {
+function illuminanceLevelOf(buffer: Buffer | undefined): number | null {
   return buffer != null && buffer.length > 0 ? buffer.readUInt8(0) : null;
 }
 
-function illuminanceLevelOf(res: ELResponse): number | null {
-  return parseIlluminanceLevel(res.message.prop?.[0]?.buffer);
-}
-
-// Logs what the device supports and returns its settable properties.
-async function logPropertyMaps(log: Logging, device: EchonetDevice): Promise<number[]> {
+// Returns the settable EPCs, logging everything the device reports it supports
+// along the way.
+async function readSettableProperties(log: Logging, device: EchonetDevice): Promise<number[]> {
   const maps = (await device.getPropertyMaps()).message.data;
   log.debug("INF properties for", device.logId, formatProperties(maps?.inf));
   log.debug("Get properties for", device.logId, formatProperties(maps?.get));
@@ -28,9 +24,9 @@ async function logPropertyMaps(log: Logging, device: EchonetDevice): Promise<num
 // Returns null when the device does not answer, which marks it unusable.
 async function readStatus(log: Logging, device: EchonetDevice): Promise<boolean | null> {
   try {
-    return (await device.get(SUPER_EPC.OPERATION_STATUS)).message.data?.status ?? null;
-  } catch {
-    log.warn("Failed to get initial status from", device.logId);
+    return (await device.getData(SUPER_EPC.OPERATION_STATUS)).status ?? null;
+  } catch (err) {
+    log.warn("Failed to get initial status from", device.logId, err);
     return null;
   }
 }
@@ -38,7 +34,7 @@ async function readStatus(log: Logging, device: EchonetDevice): Promise<boolean 
 // Falls back to 0 so an unreadable level does not block registration.
 async function readBrightness(log: Logging, device: EchonetDevice): Promise<number> {
   try {
-    const level = illuminanceLevelOf(await device.get(LIGHT_EPC.ILLUMINANCE_LEVEL));
+    const level = illuminanceLevelOf((await device.get(LIGHT_EPC.ILLUMINANCE_LEVEL)).message.prop?.[0]?.buffer);
     if (level != null) {
       log.debug("Initialized brightness:", device.logId, level);
       return level;
@@ -53,9 +49,10 @@ async function readBrightness(log: Logging, device: EchonetDevice): Promise<numb
 // exposed as a HomeKit Lightbulb.
 export class LightAccessory {
   private readonly service: Service;
+  private readonly Characteristic: typeof Characteristic;
   private readonly log: Logging;
+  private status = false;
   private brightness = 0;
-  private lastStatus: boolean;
 
   // Probes the device before wiring characteristics; returns null when the
   // device does not respond so it is not registered.
@@ -67,7 +64,7 @@ export class LightAccessory {
     const { log } = platform;
     log.info("Initializing a light accessory:", device.logId);
 
-    const settableProperties = await logPropertyMaps(log, device);
+    const settableProperties = await readSettableProperties(log, device);
     const status = await readStatus(log, device);
     if (status == null) {
       return null;
@@ -81,16 +78,16 @@ export class LightAccessory {
   }
 
   private constructor(
-    private readonly platform: ELPlatform,
+    platform: ELPlatform,
     accessory: PlatformAccessory,
     private readonly device: EchonetDevice,
     supportsBrightness: boolean,
     initialStatus: boolean,
     initialBrightness: number,
   ) {
+    this.Characteristic = platform.Characteristic;
     this.log = platform.log;
     this.service = accessory.getService(platform.Service.Lightbulb) ?? accessory.addService(platform.Service.Lightbulb);
-    this.lastStatus = initialStatus;
 
     this.setUpPower(initialStatus);
     if (supportsBrightness) {
@@ -100,48 +97,59 @@ export class LightAccessory {
   }
 
   private setUpPower(initialStatus: boolean): void {
-    this.service.updateCharacteristic(this.platform.Characteristic.On, initialStatus);
+    this.updateStatus(initialStatus);
     this.service
-      .getCharacteristic(this.platform.Characteristic.On)
+      .getCharacteristic(this.Characteristic.On)
       .onSet(async (value) => {
         const status = value as boolean;
         await this.device.set(SUPER_EPC.OPERATION_STATUS, { status });
-        this.lastStatus = status;
-        this.log.info("Set status", status, "for", this.device.logId);
+        this.updateStatus(status);
+        this.log.info("Set status:", this.device.logId, status);
       })
       .onGet(async () => {
         this.log.debug("Getting status from", this.device.logId);
         try {
-          const status = (await this.device.get(SUPER_EPC.OPERATION_STATUS)).message.data?.status;
+          const status = (await this.device.getData(SUPER_EPC.OPERATION_STATUS)).status;
           if (status != null) {
-            this.lastStatus = status;
+            this.updateStatus(status);
             this.log.debug("Got status:", this.device.logId, status);
           }
         } catch (err) {
           this.log.error("Failed to get status from", this.device.logId, err);
         }
-        return this.lastStatus;
+        return this.status;
       });
   }
 
   private setUpBrightness(initialBrightness: number): void {
     this.updateBrightness(initialBrightness);
     this.service
-      .getCharacteristic(this.platform.Characteristic.Brightness)
+      .getCharacteristic(this.Characteristic.Brightness)
       .onSet(async (value) => {
         const level = value as number;
+        // Dragging the brightness slider sends a write per step and sets run
+        // one at a time, so the cache is updated before the write rather than
+        // after it: the repeats are dropped here instead of queueing up.
         if (level === this.brightness) {
-          this.log.debug("Setting brightness no-op", level, "for", this.device.logId);
+          this.log.debug("Setting brightness no-op:", this.device.logId, level);
           return;
         }
-        this.log.debug("Setting brightness", level, "for", this.device.logId);
+        this.log.debug("Setting brightness:", this.device.logId, level);
         this.updateBrightness(level);
         await this.device.set(LIGHT_EPC.ILLUMINANCE_LEVEL, { level });
       })
-      .onGet(() => {
+      .onGet(async () => {
         this.log.debug("Getting brightness from", this.device.logId);
-        // Refresh in the background; respond immediately with the cached value.
-        void this.refreshBrightness();
+        try {
+          const res = await this.device.get(LIGHT_EPC.ILLUMINANCE_LEVEL);
+          const level = illuminanceLevelOf(res.message.prop?.[0]?.buffer);
+          this.log.debug("Got brightness:", this.device.logId, level);
+          if (level != null) {
+            this.updateBrightness(level);
+          }
+        } catch (err) {
+          this.log.error("Failed to get brightness from", this.device.logId, err);
+        }
         return this.brightness;
       });
   }
@@ -153,36 +161,29 @@ export class LightAccessory {
       this.log.debug("Received a notification from", this.device.logId);
 
       for (const property of res.message.prop ?? []) {
-        this.log.debug("Notification property:", this.device.logId, property.epc, property.edt);
+        this.log.debug("Notification property:", this.device.logId, toHex(property.epc), property.edt);
 
         if (property.epc === SUPER_EPC.OPERATION_STATUS && property.edt?.status != null) {
-          this.service.updateCharacteristic(this.platform.Characteristic.On, property.edt.status);
+          this.updateStatus(property.edt.status);
           this.log.info("Received and updated status:", this.device.logId, property.edt.status);
         } else if (property.epc === LIGHT_EPC.ILLUMINANCE_LEVEL) {
-          const level = parseIlluminanceLevel(property.buffer);
+          const level = illuminanceLevelOf(property.buffer);
           if (level != null) {
-            this.log.info("Received and updated brightness:", this.device.logId, level);
             this.updateBrightness(level);
+            this.log.info("Received and updated brightness:", this.device.logId, level);
           }
         }
       }
     });
   }
 
-  private updateBrightness(value: number): void {
-    this.brightness = value;
-    this.service.updateCharacteristic(this.platform.Characteristic.Brightness, value);
+  private updateStatus(value: boolean): void {
+    this.status = value;
+    this.service.updateCharacteristic(this.Characteristic.On, value);
   }
 
-  private async refreshBrightness(): Promise<void> {
-    try {
-      const level = illuminanceLevelOf(await this.device.get(LIGHT_EPC.ILLUMINANCE_LEVEL));
-      this.log.debug("Got brightness:", this.device.logId, level);
-      if (level != null) {
-        this.updateBrightness(level);
-      }
-    } catch (err) {
-      this.log.error("Failed to get brightness from", this.device.logId, err);
-    }
+  private updateBrightness(value: number): void {
+    this.brightness = value;
+    this.service.updateCharacteristic(this.Characteristic.Brightness, value);
   }
 }
