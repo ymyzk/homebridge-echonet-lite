@@ -9,7 +9,7 @@ import { EchonetLiteClient } from "./echonet-lite.js";
 import { SUPER_EPC } from "./epc.js";
 import { readLegacyStorage } from "./legacy-storage.js";
 import { PLATFORM_NAME, PLUGIN_NAME } from "./settings.js";
-import type { DiscoveredDevice, ELPlatformConfig } from "./types.js";
+import type { DiscoveredObjects, ELPlatformConfig } from "./types.js";
 
 export class ELPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -31,7 +31,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
     this.Service = api.hap.Service;
     this.Characteristic = api.hap.Characteristic;
     this.client = new EchonetLiteClient(log);
-    this.discovery = new DiscoveryController(log, this.client, (device) => void this.handleDiscoveredDevice(device));
+    this.discovery = new DiscoveryController(log, this.client, (objects) => void this.handleDiscoveredObjects(objects));
 
     if (!this.config) {
       return;
@@ -140,7 +140,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  private async handleDiscoveredDevice({ address, eoj: eojList }: DiscoveredDevice): Promise<void> {
+  private async handleDiscoveredObjects({ address, eojList }: DiscoveredObjects): Promise<void> {
     for (const eoj of eojList) {
       // No UUID yet: it is derived from the identification number read below.
       const probe = new EchonetDevice(this.client, address, eoj);

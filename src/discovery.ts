@@ -1,7 +1,7 @@
 import type { Logging } from "homebridge";
 
 import type { EchonetLiteClient } from "./echonet-lite.js";
-import type { DiscoveredDevice } from "./types.js";
+import type { DiscoveredObjects } from "./types.js";
 
 const DISCOVERY_DURATION_MS = 10 * 1000;
 
@@ -17,8 +17,8 @@ export class DiscoveryController {
   constructor(
     private readonly log: Logging,
     private readonly client: EchonetLiteClient,
-    // Invoked once per responding node while a scan is running.
-    private readonly onDevice: (device: DiscoveredDevice) => void,
+    // Invoked once per responding address while a scan is running.
+    private readonly onObjects: (objects: DiscoveredObjects) => void,
   ) {}
 
   get isDiscovering(): boolean {
@@ -39,7 +39,7 @@ export class DiscoveryController {
 
     this.log.info("Starting discovery");
     this.client.stopMembershipRenewal();
-    this.client.startDiscovery(this.onDevice);
+    this.client.startDiscovery(this.onObjects);
 
     this.stopTimer = setTimeout(() => {
       this.stopTimer = null;

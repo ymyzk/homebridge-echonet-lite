@@ -3,9 +3,11 @@ import type { PlatformConfig } from "homebridge";
 // ECHONET Lite object code: [class group code, class code, instance code].
 export type EOJ = [number, number, number];
 
-export interface DiscoveredDevice {
+// The ECHONET Lite objects that answered a discovery scan at one address. Each
+// becomes a device here.
+export interface DiscoveredObjects {
   address: string;
-  eoj: EOJ[];
+  eojList: EOJ[];
 }
 
 export interface ELPlatformConfig extends PlatformConfig {
