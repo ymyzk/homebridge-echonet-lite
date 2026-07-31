@@ -5,6 +5,9 @@
 export const SUPER_EPC = {
   OPERATION_STATUS: 0x80,
   IDENTIFICATION_NUMBER: 0x83,
+  INF_PROPERTY_MAP: 0x9d,
+  SET_PROPERTY_MAP: 0x9e,
+  GET_PROPERTY_MAP: 0x9f,
 } as const;
 
 // Lighting (0x02/0x90, 0x02/0x91).

@@ -5,8 +5,7 @@ import type { ELData, Rinfo } from "echonet-lite";
 import type { Logging } from "homebridge";
 import pLimit from "p-limit";
 
-import type { Property, WritableProperty } from "./codec.js";
-import { expandPropertyMap } from "./codec.js";
+import type { Property, PropertyWrite } from "./codec.js";
 import type { DiscoveredObjects, EOJ } from "./types.js";
 import { formatEOJ } from "./utils.js";
 
@@ -19,19 +18,19 @@ const REQUEST_TIMEOUT_MS = 15 * 1000;
 const CONTROLLER_EOJ = "05ff01";
 // Instance list S of the node profile, which a discovery scan asks for.
 const EPC_INSTANCE_LIST = "d6";
-const PROPERTY_MAP_EPCS = ["9d", "9e", "9f"] as const;
 
 // The service codes that answer a request. Anything else arriving with a
 // matching transaction ID is not a response to it.
 const RESPONSE_ESVS = new Set([EL.GET_RES, EL.SET_RES]);
 const ERROR_ESVS = new Set([EL.GET_SNA, EL.SETC_SNA, EL.SETI_SNA, EL.INF_SNA, EL.SETGET_SNA]);
 
-// The properties a device reports it supports, as EPC lists.
-export interface PropertyMaps {
-  inf: number[];
-  set: number[];
-  get: number[];
-}
+// The decoded values of a tuple of properties, positionally: reading
+// [OperationStatus, TargetTemperature] gives back [boolean | null, number |
+// null]. A null slot means the device answered without a usable value for that
+// property.
+export type PropertyValues<P extends readonly Property<unknown>[]> = {
+  [K in keyof P]: P[K] extends Property<infer T> ? T | null : never;
+};
 
 // A property notification pushed by a device, already decoded.
 export interface Notification {
@@ -128,32 +127,51 @@ export class EchonetLiteClient {
     this.discoveryListener = null;
   }
 
-  // Reads a single property. Resolves to null when the device answered but had
-  // no usable value for it, which callers treat as "unavailable" rather than as
-  // an error.
-  async getProperty<T>(address: string, eoj: EOJ, property: Property<T>): Promise<T | null> {
-    const details = await this.getQueue(() => this.request(address, eoj, EL.GET, { [epcKey(property.epc)]: "" }));
-    const edt = details[epcKey(property.epc)];
-    if (edt == null || edt === "") {
-      return null;
+  // Reads several properties in one request, which costs one round trip and one
+  // queue slot no matter how many are asked for. Each slot of the result is null
+  // when the device answered but had no usable value for that property, which
+  // callers treat as "unavailable" rather than as an error.
+  //
+  // Repeating a property is harmless: it collapses to a single EPC on the wire
+  // and every slot holding it decodes the same answer.
+  async getProperties<P extends readonly Property<unknown>[]>(
+    address: string,
+    eoj: EOJ,
+    ...properties: P
+  ): Promise<PropertyValues<P>> {
+    if (properties.length === 0) {
+      // A request with no properties would put an OPC of zero on the wire.
+      return [] as unknown as PropertyValues<P>;
     }
-    return property.decode(Buffer.from(edt, "hex"));
-  }
 
-  async setProperty<T>(address: string, eoj: EOJ, property: WritableProperty<T>, value: T): Promise<void> {
-    const edt = property.encode(value).toString("hex");
-    await this.setQueue(() => this.request(address, eoj, EL.SETC, { [epcKey(property.epc)]: edt }));
-  }
-
-  async getPropertyMaps(address: string, eoj: EOJ): Promise<PropertyMaps> {
     const details = await this.getQueue(() =>
-      this.request(address, eoj, EL.GET, Object.fromEntries(PROPERTY_MAP_EPCS.map((epc) => [epc, ""]))),
+      this.request(address, eoj, EL.GET, Object.fromEntries(properties.map((property) => [epcKey(property.epc), ""]))),
     );
-    const mapOf = (epc: string) => {
-      const edt = details[epc];
-      return edt ? expandPropertyMap(Buffer.from(edt, "hex")) : [];
-    };
-    return { inf: mapOf("9d"), set: mapOf("9e"), get: mapOf("9f") };
+
+    // TypeScript cannot see that mapping over the tuple preserves its shape.
+    return properties.map((property) => {
+      const edt = details[epcKey(property.epc)];
+      if (edt == null || edt === "") {
+        return null;
+      }
+      return property.decode(Buffer.from(edt, "hex"));
+    }) as PropertyValues<P>;
+  }
+
+  // Writes several properties in one request. Build each argument with the
+  // codec's `write`, which type-checks the value against its property.
+  async setProperties(address: string, eoj: EOJ, ...writes: PropertyWrite[]): Promise<void> {
+    if (writes.length === 0) {
+      return;
+    }
+    await this.setQueue(() =>
+      this.request(
+        address,
+        eoj,
+        EL.SETC,
+        Object.fromEntries(writes.map((entry) => [epcKey(entry.epc), entry.edt.toString("hex")])),
+      ),
+    );
   }
 
   onNotify(listener: (notification: Notification) => void): () => void {
@@ -276,6 +294,17 @@ export class EchonetLiteClient {
     }
 
     if (isError) {
+      // A Get_SNA is a partial answer rather than a failure: the properties the
+      // device could not answer come back with an empty EDT, which reads as no
+      // usable value just like any other empty one. Anything the device did
+      // answer is still worth having, and one unsupported EPC must not cost the
+      // caller the other properties in the same request. A refused write is a
+      // real failure, so the Set service codes keep rejecting.
+      if (els.ESV === EL.GET_SNA) {
+        this.log.warn("Device", rinfo.address, els.SEOJ, "could not answer part of a get");
+        entry.resolve(els.DETAILs);
+        return;
+      }
       entry.reject(new Error(`Device ${rinfo.address} ${els.SEOJ} rejected the request (ESV ${els.ESV})`));
       return;
     }

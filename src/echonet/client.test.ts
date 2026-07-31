@@ -7,7 +7,7 @@ import type { ELData, Rinfo, UserFunc } from "echonet-lite";
 import type { Logging } from "homebridge";
 
 import { EchonetLiteClient } from "./client.js";
-import { OperationStatus, TargetTemperature } from "./codec.js";
+import { AirconOperationMode, OperationStatus, TargetTemperature, write } from "./codec.js";
 import type { EOJ } from "./types.js";
 
 const DEVICE = "192.168.1.50";
@@ -101,7 +101,7 @@ describe("EchonetLiteClient", () => {
 
   it("resolves a get with the decoded property", async () => {
     const { client, deliver, sent } = await createClient();
-    const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus);
     await flush();
 
     expect(sent).toHaveLength(1);
@@ -109,16 +109,16 @@ describe("EchonetLiteClient", () => {
     expect(sent[0].details).toEqual({ "80": "" });
 
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "30" } }), null);
-    expect(await pending).toBe(true);
+    expect(await pending).toEqual([true]);
     client.close();
   });
 
   it("resolves to null when the device answers with no data for the property", async () => {
     const { client, deliver } = await createClient();
-    const pending = client.getProperty(DEVICE, AIRCON, TargetTemperature);
+    const pending = client.getProperties(DEVICE, AIRCON, TargetTemperature);
     await flush();
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { b3: "" } }), null);
-    expect(await pending).toBeNull();
+    expect(await pending).toEqual([null]);
     client.close();
   });
 
@@ -126,7 +126,7 @@ describe("EchonetLiteClient", () => {
     // The loopback spike hit exactly this: our own outgoing GET came back with
     // the same transaction ID and consumed the pending entry.
     const { client, deliver } = await createClient();
-    const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus);
     await flush();
 
     deliver(
@@ -137,47 +137,97 @@ describe("EchonetLiteClient", () => {
     // Still waiting, so the real response can still land.
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "31" } }), null);
 
-    expect(await pending).toBe(false);
+    expect(await pending).toEqual([false]);
     client.close();
   });
 
   it("ignores a response from a different object with the same transaction ID", async () => {
     const { client, deliver } = await createClient();
-    const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus);
     await flush();
 
     deliver(rinfo(), frame({ TID: "0001", SEOJ: "029001", DETAILs: { "80": "30" } }), null);
     deliver(rinfo(), frame({ TID: "0001", SEOJ: "013001", DETAILs: { "80": "31" } }), null);
 
-    expect(await pending).toBe(false);
+    expect(await pending).toEqual([false]);
     client.close();
   });
 
   it("ignores a response from a different address with the same transaction ID", async () => {
     const { client, deliver } = await createClient();
-    const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus);
     await flush();
 
     deliver(rinfo("192.168.1.99"), frame({ TID: "0001", DETAILs: { "80": "30" } }), null);
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "31" } }), null);
 
-    expect(await pending).toBe(false);
+    expect(await pending).toEqual([false]);
     client.close();
   });
 
-  it("rejects when the device answers with an error service code", async () => {
+  it("rejects when the device answers a set with an error service code", async () => {
     const { client, deliver } = await createClient();
-    const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    const pending = client.setProperties(DEVICE, AIRCON, write(TargetTemperature, 25));
     await flush();
 
-    deliver(rinfo(), frame({ TID: "0001", ESV: EL.GET_SNA, DETAILs: { "80": "" } }), null);
+    deliver(rinfo(), frame({ TID: "0001", ESV: EL.SETC_SNA, DETAILs: { b3: "19" } }), null);
     await expect(pending).rejects.toThrow(/rejected the request/);
+    client.close();
+  });
+
+  it("reads several properties in a single request", async () => {
+    const { client, deliver, sent } = await createClient();
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus, TargetTemperature);
+    await flush();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].esv).toBe(EL.GET);
+    expect(sent[0].details).toEqual({ "80": "", b3: "" });
+
+    deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "30", b3: "19" } }), null);
+    // The tuple is typed positionally, so these need no narrowing.
+    const [status, temperature]: [boolean | null, number | null] = await pending;
+    expect(status).toBe(true);
+    expect(temperature).toBe(25);
+    client.close();
+  });
+
+  it("treats a Get_SNA as a partial answer rather than a failure", async () => {
+    // One unsupported property must not cost the caller the others that came
+    // back in the same response.
+    const { client, deliver } = await createClient();
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus, AirconOperationMode);
+    await flush();
+
+    deliver(rinfo(), frame({ TID: "0001", ESV: EL.GET_SNA, DETAILs: { "80": "30", b0: "" } }), null);
+    expect(await pending).toEqual([true, null]);
+    client.close();
+  });
+
+  it("collapses a repeated property into one EPC and decodes it into every slot", async () => {
+    const { client, deliver, sent } = await createClient();
+    const pending = client.getProperties(DEVICE, AIRCON, TargetTemperature, TargetTemperature);
+    await flush();
+
+    expect(sent[0].details).toEqual({ b3: "" });
+    deliver(rinfo(), frame({ TID: "0001", DETAILs: { b3: "19" } }), null);
+    expect(await pending).toEqual([25, 25]);
+    client.close();
+  });
+
+  it("sends nothing when asked for no properties", async () => {
+    const { client, sent } = await createClient();
+    expect(await client.getProperties(DEVICE, AIRCON)).toEqual([]);
+    await client.setProperties(DEVICE, AIRCON);
+    await flush();
+
+    expect(sent).toHaveLength(0);
     client.close();
   });
 
   it("encodes a set and waits for the response", async () => {
     const { client, deliver, sent } = await createClient();
-    const pending = client.setProperty(DEVICE, AIRCON, TargetTemperature, 25);
+    const pending = client.setProperties(DEVICE, AIRCON, write(TargetTemperature, 25));
     await flush();
 
     expect(sent[0].esv).toBe(EL.SETC);
@@ -188,15 +238,23 @@ describe("EchonetLiteClient", () => {
     client.close();
   });
 
-  it("expands property maps into EPC lists", async () => {
+  it("writes several properties in a single request", async () => {
     const { client, deliver, sent } = await createClient();
-    const pending = client.getPropertyMaps(DEVICE, AIRCON);
+    const pending = client.setProperties(
+      DEVICE,
+      AIRCON,
+      write(OperationStatus, true),
+      write(TargetTemperature, 25),
+      write(AirconOperationMode, 2),
+    );
     await flush();
 
-    expect(sent[0].details).toEqual({ "9d": "", "9e": "", "9f": "" });
-    deliver(rinfo(), frame({ TID: "0001", DETAILs: { "9d": "0280b0", "9e": "01b3", "9f": "0380b0bb" } }), null);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].esv).toBe(EL.SETC);
+    expect(sent[0].details).toEqual({ "80": "30", b3: "19", b0: "42" });
 
-    expect(await pending).toEqual({ inf: [0x80, 0xb0], set: [0xb3], get: [0x80, 0xb0, 0xbb] });
+    deliver(rinfo(), frame({ TID: "0001", ESV: EL.SET_RES, DETAILs: { "80": "", b3: "", b0: "" } }), null);
+    await pending;
     client.close();
   });
 
@@ -284,7 +342,7 @@ describe("EchonetLiteClient", () => {
 
   it("rejects everything still in flight when closed", async () => {
     const { client } = await createClient();
-    const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus);
     await flush();
     client.close();
     await expect(pending).rejects.toThrow(/closed/);

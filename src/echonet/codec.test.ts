@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   AirconOperationMode,
+  GetPropertyMap,
   IdentificationNumber,
   IlluminanceLevel,
+  InfPropertyMap,
   OperationStatus,
   RoomTemperature,
+  SetPropertyMap,
   TargetTemperature,
   expandPropertyMap,
+  write,
 } from "./codec.js";
 
 const hex = (value: string) => Buffer.from(value, "hex");
@@ -114,6 +118,17 @@ describe("temperatures", () => {
   });
 });
 
+describe("write", () => {
+  it("encodes the value against its property", () => {
+    expect(write(TargetTemperature, 25)).toEqual({
+      epc: TargetTemperature.epc,
+      name: TargetTemperature.name,
+      edt: hex("19"),
+    });
+    expect(write(OperationStatus, false).edt).toEqual(hex("31"));
+  });
+});
+
 describe("expandPropertyMap", () => {
   // All three captured from a live node profile object during the spike.
   it("expands a form 1 map", () => {
@@ -141,5 +156,19 @@ describe("expandPropertyMap", () => {
 
   it("returns an empty list for an empty EDT", () => {
     expect(expandPropertyMap(hex(""))).toEqual([]);
+  });
+});
+
+describe("property map properties", () => {
+  it("reads each map from its own EPC", () => {
+    expect(InfPropertyMap.epc).toBe(0x9d);
+    expect(SetPropertyMap.epc).toBe(0x9e);
+    expect(GetPropertyMap.epc).toBe(0x9f);
+  });
+
+  it("decodes an EDT into an EPC list", () => {
+    expect(InfPropertyMap.decode(hex("0280b0"))).toEqual([0x80, 0xb0]);
+    expect(SetPropertyMap.decode(hex("01b3"))).toEqual([0xb3]);
+    expect(GetPropertyMap.decode(hex("0380b0bb"))).toEqual([0x80, 0xb0, 0xbb]);
   });
 });
