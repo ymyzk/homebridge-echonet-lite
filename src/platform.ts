@@ -15,11 +15,10 @@ export class ELPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
   public readonly Characteristic: typeof Characteristic;
 
-  public readonly el: EchonetLiteClient;
-
+  private readonly client: EchonetLiteClient;
   private readonly discovery: DiscoveryController;
   private readonly accessories = new Map<string, PlatformAccessory>();
-  private readonly builtAccessories = new Set<string>();
+  private readonly uuidsWithHandler = new Set<string>();
   private cachedRefreshSwitch: PlatformAccessory | null = null;
 
   constructor(
@@ -31,8 +30,8 @@ export class ELPlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = api.hap.Service;
     this.Characteristic = api.hap.Characteristic;
-    this.el = new EchonetLiteClient(log);
-    this.discovery = new DiscoveryController(log, this.el, (device) => void this.handleDiscoveredDevice(device));
+    this.client = new EchonetLiteClient(log);
+    this.discovery = new DiscoveryController(log, this.client, (device) => void this.handleDiscoveredDevice(device));
 
     if (!this.config) {
       return;
@@ -65,7 +64,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
     this.migrateLegacyAccessories();
 
     try {
-      await this.el.init();
+      await this.client.init();
     } catch (err) {
       this.log.error("Error in init", err);
       return;
@@ -93,7 +92,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
 
     // Snapshot: the loop drops the accessories it cannot restore as it goes.
     for (const [uuid, accessory] of [...this.accessories]) {
-      if (this.builtAccessories.has(uuid)) {
+      if (this.uuidsWithHandler.has(uuid)) {
         continue;
       }
 
@@ -105,7 +104,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
         continue;
       }
 
-      const device = new EchonetDevice(this.el, context.address, context.eoj, uuid);
+      const device = new EchonetDevice(this.client, context.address, context.eoj, uuid);
       this.log.info("Adding existing accessory:", device.logId);
       try {
         await this.syncAccessory(device, uuid);
@@ -144,11 +143,11 @@ export class ELPlatform implements DynamicPlatformPlugin {
   private async handleDiscoveredDevice({ address, eoj: eojList }: DiscoveredDevice): Promise<void> {
     for (const eoj of eojList) {
       // No UUID yet: it is derived from the identification number read below.
-      const probe = new EchonetDevice(this.el, address, eoj);
+      const probe = new EchonetDevice(this.client, address, eoj);
       this.log.info("Discovered device:", probe.logId);
 
       // Skip invalid devices.
-      if (!this.el.getClassName(eoj)) {
+      if (!this.client.getClassName(eoj)) {
         continue;
       }
 
@@ -164,7 +163,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
       uid ??= address + "|" + JSON.stringify(eoj);
 
       const uuid = this.api.hap.uuid.generate(uid);
-      const device = new EchonetDevice(this.el, address, eoj, uuid);
+      const device = new EchonetDevice(this.client, address, eoj, uuid);
       try {
         await this.syncAccessory(device, uuid);
       } catch (err) {
@@ -178,28 +177,28 @@ export class ELPlatform implements DynamicPlatformPlugin {
   private async syncAccessory(device: EchonetDevice, uuid: string): Promise<void> {
     const registered = this.accessories.get(uuid);
     const accessory =
-      registered ?? new this.api.platformAccessory(this.el.getClassName(device.eoj) ?? "ECHONET Lite Device", uuid);
+      registered ?? new this.api.platformAccessory(this.client.getClassName(device.eoj) ?? "ECHONET Lite Device", uuid);
 
     // May be called twice for the same device due to refreshing.
-    if (!this.builtAccessories.has(uuid)) {
+    if (!this.uuidsWithHandler.has(uuid)) {
       if (!(await createAccessoryHandler(this, accessory, device))) {
         // Unsupported or unusable device.
         return;
       }
-      this.builtAccessories.add(uuid);
+      this.uuidsWithHandler.add(uuid);
       accessory.on("identify", () => {});
     }
 
-    const previous = getAccessoryContext(accessory);
+    const previousContext = getAccessoryContext(accessory);
     setAccessoryContext(accessory, { address: device.address, eoj: device.eoj });
 
     if (!registered) {
       this.log.info("Found new accessory:", device.logId);
       this.accessories.set(uuid, accessory);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-    } else if (previous?.address !== device.address) {
+    } else if (previousContext?.address !== device.address) {
       // The device answered from a new address; persist it for the next boot.
-      this.log.info("Updated cached address of", device.logId, "was:", previous?.address);
+      this.log.info("Updated cached address of", device.logId, "was:", previousContext?.address);
       this.api.updatePlatformAccessories([accessory]);
     }
   }

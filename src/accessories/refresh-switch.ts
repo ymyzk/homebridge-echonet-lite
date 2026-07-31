@@ -40,7 +40,7 @@ export function setUpRefreshSwitch(
   const service = accessory.getService(Service.Switch) ?? accessory.addService(Service.Switch);
   service
     .getCharacteristic(Characteristic.On)
-    .onGet(() => discovery.discovering)
+    .onGet(() => discovery.isDiscovering)
     .onSet((value) => {
       if (value) {
         discovery.start();
