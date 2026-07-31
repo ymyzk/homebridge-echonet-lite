@@ -1,5 +1,4 @@
 import type { Logging, PlatformAccessory, Service } from "homebridge";
-import type { ELResponse } from "node-echonet-lite";
 
 import type { EchonetDevice } from "../echonet-device.js";
 import { LIGHT_EPC, SUPER_EPC } from "../epc.js";
@@ -8,12 +7,8 @@ import { formatProperties } from "../utils.js";
 
 // The illuminance level is read from the raw property buffer: some devices
 // answer with an EDT that node-echonet-lite does not decode into `data.level`.
-function parseIlluminanceLevel(buffer: Buffer | undefined): number | null {
+function illuminanceLevelOf(buffer: Buffer | undefined): number | null {
   return buffer != null && buffer.length > 0 ? buffer.readUInt8(0) : null;
-}
-
-function illuminanceLevelOf(res: ELResponse): number | null {
-  return parseIlluminanceLevel(res.message.prop?.[0]?.buffer);
 }
 
 // Logs what the device supports and returns its settable properties.
@@ -38,7 +33,7 @@ async function readStatus(log: Logging, device: EchonetDevice): Promise<boolean 
 // Falls back to 0 so an unreadable level does not block registration.
 async function readBrightness(log: Logging, device: EchonetDevice): Promise<number> {
   try {
-    const level = illuminanceLevelOf(await device.get(LIGHT_EPC.ILLUMINANCE_LEVEL));
+    const level = illuminanceLevelOf((await device.get(LIGHT_EPC.ILLUMINANCE_LEVEL)).message.prop?.[0]?.buffer);
     if (level != null) {
       log.debug("Initialized brightness:", device.logId, level);
       return level;
@@ -158,7 +153,7 @@ export class LightAccessory {
           this.updateStatus(property.edt.status);
           this.log.info("Received and updated status:", this.device.logId, property.edt.status);
         } else if (property.epc === LIGHT_EPC.ILLUMINANCE_LEVEL) {
-          const level = parseIlluminanceLevel(property.buffer);
+          const level = illuminanceLevelOf(property.buffer);
           if (level != null) {
             this.log.info("Received and updated brightness:", this.device.logId, level);
             this.updateBrightness(level);
@@ -180,7 +175,7 @@ export class LightAccessory {
 
   private async refreshBrightness(): Promise<void> {
     try {
-      const level = illuminanceLevelOf(await this.device.get(LIGHT_EPC.ILLUMINANCE_LEVEL));
+      const level = illuminanceLevelOf((await this.device.get(LIGHT_EPC.ILLUMINANCE_LEVEL)).message.prop?.[0]?.buffer);
       this.log.debug("Got brightness:", this.device.logId, level);
       if (level != null) {
         this.updateBrightness(level);
