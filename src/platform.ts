@@ -78,7 +78,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
     // devices instead of waiting for the refresh switch.
     if (this.accessories.size === 0) {
       this.log.info("No existing accessories found");
-      await this.discovery.start();
+      this.discovery.start();
       return;
     }
 

@@ -1,5 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
-
 import type { Logging } from "homebridge";
 
 import type { EchonetLiteClient } from "./echonet-lite.js";
@@ -7,11 +5,13 @@ import type { DiscoveredDevice } from "./types.js";
 
 const DISCOVERY_TIMEOUT_MS = 10 * 1000;
 
-// Runs ECHONET Lite discovery scans: at most one at a time, bounded by
-// DISCOVERY_TIMEOUT_MS, with the multicast membership renewal paused while the
-// socket is busy answering the scan.
+// Runs ECHONET Lite discovery scans: at most one at a time, ended by a timer
+// after DISCOVERY_TIMEOUT_MS, with the multicast membership renewal paused while
+// the socket is busy answering the scan. Starting a scan returns right away, so
+// a HomeKit write is never left waiting for the whole scan.
 export class DiscoveryController {
   private isDiscovering = false;
+  private stopTimer: NodeJS.Timeout | null = null;
   private readonly stateListeners = new Set<(isDiscovering: boolean) => void>();
 
   constructor(
@@ -31,7 +31,7 @@ export class DiscoveryController {
     this.stateListeners.add(listener);
   }
 
-  async start(): Promise<void> {
+  start(): void {
     if (this.isDiscovering) {
       return;
     }
@@ -41,8 +41,10 @@ export class DiscoveryController {
     this.el.stopMembershipRenewal();
     this.el.startDiscovery(this.onDevice);
 
-    await delay(DISCOVERY_TIMEOUT_MS);
-    this.stop();
+    this.stopTimer = setTimeout(() => {
+      this.stopTimer = null;
+      this.stop();
+    }, DISCOVERY_TIMEOUT_MS);
   }
 
   stop(): void {
@@ -50,6 +52,13 @@ export class DiscoveryController {
       return;
     }
     this.setDiscovering(false);
+
+    // Cancelling the timer of the scan being stopped keeps it from ending a
+    // later scan too early.
+    if (this.stopTimer !== null) {
+      clearTimeout(this.stopTimer);
+      this.stopTimer = null;
+    }
 
     // After stopping discovery, el would listen to broadcast.
     this.log.info("Finished discovery");

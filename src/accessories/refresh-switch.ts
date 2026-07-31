@@ -41,9 +41,9 @@ export function setUpRefreshSwitch(
   service
     .getCharacteristic(Characteristic.On)
     .onGet(() => discovery.discovering)
-    .onSet(async (value) => {
+    .onSet((value) => {
       if (value) {
-        await discovery.start();
+        discovery.start();
       } else {
         discovery.stop();
       }
