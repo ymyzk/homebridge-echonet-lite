@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, expect, it } from "vitest";
 
 import {
   AirconOperationMode,
@@ -20,62 +19,62 @@ describe("IdentificationNumber", () => {
   it("takes bytes 4..17 as upper-case hex", () => {
     // Captured from a live node profile object during the migration spike.
     const edt = hex("fe00007700000200000000000000000001");
-    assert.equal(IdentificationNumber.decode(edt), "00000200000000000000000001");
+    expect(IdentificationNumber.decode(edt)).toBe("00000200000000000000000001");
   });
 
   it("excludes the protocol byte and the manufacturer code", () => {
     const edt = hex("fe0000ff" + "0102030405060708090a0b0c0d");
-    assert.equal(IdentificationNumber.decode(edt), "0102030405060708090A0B0C0D");
+    expect(IdentificationNumber.decode(edt)).toBe("0102030405060708090A0B0C0D");
   });
 
   it("clamps rather than throwing on a short EDT", () => {
-    assert.equal(IdentificationNumber.decode(hex("fe000077aabb")), "AABB");
+    expect(IdentificationNumber.decode(hex("fe000077aabb"))).toBe("AABB");
   });
 
   it("returns null when there is nothing past the manufacturer code", () => {
-    assert.equal(IdentificationNumber.decode(hex("fe000077")), null);
+    expect(IdentificationNumber.decode(hex("fe000077"))).toBeNull();
   });
 });
 
 describe("OperationStatus", () => {
   it("decodes 0x30 as on and 0x31 as off", () => {
-    assert.equal(OperationStatus.decode(hex("30")), true);
-    assert.equal(OperationStatus.decode(hex("31")), false);
+    expect(OperationStatus.decode(hex("30"))).toBe(true);
+    expect(OperationStatus.decode(hex("31"))).toBe(false);
   });
 
   it("round-trips", () => {
-    assert.equal(OperationStatus.decode(OperationStatus.encode(true)), true);
-    assert.equal(OperationStatus.decode(OperationStatus.encode(false)), false);
+    expect(OperationStatus.decode(OperationStatus.encode(true))).toBe(true);
+    expect(OperationStatus.decode(OperationStatus.encode(false))).toBe(false);
   });
 
   it("returns null on an empty EDT", () => {
-    assert.equal(OperationStatus.decode(hex("")), null);
+    expect(OperationStatus.decode(hex(""))).toBeNull();
   });
 });
 
 describe("IlluminanceLevel", () => {
   it("decodes the raw percentage", () => {
-    assert.equal(IlluminanceLevel.decode(hex("00")), 0);
-    assert.equal(IlluminanceLevel.decode(hex("64")), 100);
+    expect(IlluminanceLevel.decode(hex("00"))).toBe(0);
+    expect(IlluminanceLevel.decode(hex("64"))).toBe(100);
   });
 
   it("round-trips", () => {
-    assert.equal(IlluminanceLevel.decode(IlluminanceLevel.encode(42)), 42);
+    expect(IlluminanceLevel.decode(IlluminanceLevel.encode(42))).toBe(42);
   });
 });
 
 describe("AirconOperationMode", () => {
   // AIRCON_MODE counts from 1; the wire values are offset by 0x40.
   it("offsets the wire value by 0x40", () => {
-    assert.equal(AirconOperationMode.decode(hex("41")), 1); // auto
-    assert.equal(AirconOperationMode.decode(hex("42")), 2); // cooling
-    assert.equal(AirconOperationMode.decode(hex("43")), 3); // heating
+    expect(AirconOperationMode.decode(hex("41"))).toBe(1); // auto
+    expect(AirconOperationMode.decode(hex("42"))).toBe(2); // cooling
+    expect(AirconOperationMode.decode(hex("43"))).toBe(3); // heating
   });
 
   it("encodes back to the wire values", () => {
-    assert.deepEqual(AirconOperationMode.encode(1), hex("41"));
-    assert.deepEqual(AirconOperationMode.encode(2), hex("42"));
-    assert.deepEqual(AirconOperationMode.encode(3), hex("43"));
+    expect(AirconOperationMode.encode(1)).toEqual(hex("41"));
+    expect(AirconOperationMode.encode(2)).toEqual(hex("42"));
+    expect(AirconOperationMode.encode(3)).toEqual(hex("43"));
   });
 });
 
@@ -83,50 +82,49 @@ describe("temperatures", () => {
   // The target is unsigned and the room temperature is signed. Getting this
   // backwards silently reports -5 degrees as 251 or vice versa.
   it("decodes the target temperature as unsigned", () => {
-    assert.equal(TargetTemperature.decode(hex("19")), 25);
-    assert.equal(TargetTemperature.decode(hex("00")), 0);
+    expect(TargetTemperature.decode(hex("19"))).toBe(25);
+    expect(TargetTemperature.decode(hex("00"))).toBe(0);
   });
 
   it("decodes the room temperature as signed", () => {
-    assert.equal(RoomTemperature.decode(hex("19")), 25);
-    assert.equal(RoomTemperature.decode(hex("fb")), -5);
+    expect(RoomTemperature.decode(hex("19"))).toBe(25);
+    expect(RoomTemperature.decode(hex("fb"))).toBe(-5);
   });
 
   it("reports 0xFD as no reading for both", () => {
-    assert.equal(TargetTemperature.decode(hex("fd")), null);
+    expect(TargetTemperature.decode(hex("fd"))).toBeNull();
     // node-echonet-lite missed this one: it compared a signed byte against
     // 0xFD, so it reported -3 degrees instead of no reading.
-    assert.equal(RoomTemperature.decode(hex("fd")), null);
+    expect(RoomTemperature.decode(hex("fd"))).toBeNull();
   });
 
   it("reports an out-of-spec target temperature as-is rather than as no reading", () => {
     // Matching node-echonet-lite: the 0..50 range is a write-side constraint.
-    assert.equal(TargetTemperature.decode(hex("40")), 64);
+    expect(TargetTemperature.decode(hex("40"))).toBe(64);
   });
 
   it("round-trips the target temperature", () => {
-    assert.equal(TargetTemperature.decode(TargetTemperature.encode(28)), 28);
+    expect(TargetTemperature.decode(TargetTemperature.encode(28))).toBe(28);
   });
 
   it("reports a multi-byte EDT as no reading", () => {
-    assert.equal(TargetTemperature.decode(hex("1900")), null);
-    assert.equal(RoomTemperature.decode(hex("1900")), null);
-    assert.equal(OperationStatus.decode(hex("3000")), null);
+    expect(TargetTemperature.decode(hex("1900"))).toBeNull();
+    expect(RoomTemperature.decode(hex("1900"))).toBeNull();
+    expect(OperationStatus.decode(hex("3000"))).toBeNull();
   });
 });
 
 describe("expandPropertyMap", () => {
   // All three captured from a live node profile object during the spike.
   it("expands a form 1 map", () => {
-    assert.deepEqual(expandPropertyMap(hex("0280d5")), [0x80, 0xd5]);
-    assert.deepEqual(expandPropertyMap(hex("01bf")), [0xbf]);
+    expect(expandPropertyMap(hex("0280d5"))).toEqual([0x80, 0xd5]);
+    expect(expandPropertyMap(hex("01bf"))).toEqual([0xbf]);
   });
 
   it("expands a 15-property map", () => {
-    assert.deepEqual(
-      expandPropertyMap(hex("0f808283888a8b9d9e9fbfd3d4d5d6d7")),
-      [0x80, 0x82, 0x83, 0x88, 0x8a, 0x8b, 0x9d, 0x9e, 0x9f, 0xbf, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7],
-    );
+    expect(expandPropertyMap(hex("0f808283888a8b9d9e9fbfd3d4d5d6d7"))).toEqual([
+      0x80, 0x82, 0x83, 0x88, 0x8a, 0x8b, 0x9d, 0x9e, 0x9f, 0xbf, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7,
+    ]);
   });
 
   it("handles a map with 16 or more properties, which arrives pre-normalized", () => {
@@ -134,14 +132,14 @@ describe("expandPropertyMap", () => {
     // before it reaches us, so it is the same count-then-list layout.
     const epcs = [0x80, 0x81, 0x82, 0x83, 0x88, 0x8a, 0x8b, 0x9d, 0x9e, 0x9f, 0xb0, 0xb3, 0xbb, 0xd3, 0xd4, 0xd5];
     const edt = Buffer.of(epcs.length, ...epcs);
-    assert.deepEqual(expandPropertyMap(edt), epcs);
+    expect(expandPropertyMap(edt)).toEqual(epcs);
   });
 
   it("trusts the buffer over an inaccurate count byte", () => {
-    assert.deepEqual(expandPropertyMap(hex("ff8081")), [0x80, 0x81]);
+    expect(expandPropertyMap(hex("ff8081"))).toEqual([0x80, 0x81]);
   });
 
   it("returns an empty list for an empty EDT", () => {
-    assert.deepEqual(expandPropertyMap(hex("")), []);
+    expect(expandPropertyMap(hex(""))).toEqual([]);
   });
 });
