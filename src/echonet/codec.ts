@@ -21,6 +21,21 @@ export interface WritableProperty<T> extends Property<T> {
   encode(value: T): Buffer;
 }
 
+// A property paired with the value to write to it, already encoded. Writing
+// several properties at once means carrying values of different types together,
+// which no single `T` can describe; `write` below checks the value against its
+// property while `T` is still known and hands back this erased form.
+export interface PropertyWrite {
+  readonly epc: number;
+  // A human-readable name, used in log messages.
+  readonly name: string;
+  readonly edt: Buffer;
+}
+
+export function write<T>(property: WritableProperty<T>, value: T): PropertyWrite {
+  return { epc: property.epc, name: property.name, edt: property.encode(value) };
+}
+
 // 0x80. ON is 0x30 and OFF is 0x31 — note that the higher byte is the "off"
 // one, which is the opposite of what the numbers suggest.
 export const OperationStatus: WritableProperty<boolean> = {
@@ -144,3 +159,15 @@ export function expandPropertyMap(edt: Buffer): number[] {
   const count = Math.min(edt.readUInt8(0), edt.length - 1);
   return [...edt.subarray(1, 1 + count)];
 }
+
+// The three maps are read together, so they are declared as ordinary properties
+// rather than handled specially by the client.
+const propertyMap = (epc: number, name: string): Property<number[]> => ({
+  epc,
+  name,
+  decode: expandPropertyMap,
+});
+
+export const InfPropertyMap = propertyMap(SUPER_EPC.INF_PROPERTY_MAP, "INF property map");
+export const SetPropertyMap = propertyMap(SUPER_EPC.SET_PROPERTY_MAP, "Set property map");
+export const GetPropertyMap = propertyMap(SUPER_EPC.GET_PROPERTY_MAP, "Get property map");
