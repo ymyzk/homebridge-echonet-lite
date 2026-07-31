@@ -195,12 +195,103 @@ describe("EchonetLiteClient", () => {
   it("treats a Get_SNA as a partial answer rather than a failure", async () => {
     // One unsupported property must not cost the caller the others that came
     // back in the same response.
-    const { client, deliver } = await createClient();
+    const { client, deliver, sent } = await createClient();
     const pending = client.getProperties(DEVICE, AIRCON, OperationStatus, AirconOperationMode);
     await flush();
 
     deliver(rinfo(), frame({ TID: "0001", ESV: EL.GET_SNA, DETAILs: { "80": "30", b0: "" } }), null);
     expect(await pending).toEqual([true, null]);
+    // The device told us what it knows, so there is nothing to ask again.
+    expect(sent).toHaveLength(1);
+    client.close();
+  });
+
+  it("retries a Get_SNA that answered nothing at all", async () => {
+    // What a device says when it is too busy to look anything up. Taken at face
+    // value it reads as every property being unavailable, which downstream shows
+    // an air conditioner as switched off.
+    const { client, deliver, sent } = await createClient();
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus, AirconOperationMode);
+    await flush();
+
+    deliver(rinfo(), frame({ TID: "0001", ESV: EL.GET_SNA, DETAILs: { "80": "", b0: "" } }), null);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+
+    deliver(rinfo(), frame({ TID: "0002", DETAILs: { "80": "30", b0: "42" } }), null);
+    expect(await pending).toEqual([true, 2]);
+    client.close();
+  });
+
+  it("gives up on a device that stays busy", async () => {
+    const { client, deliver, sent } = await createClient();
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus);
+    const busy = (tid: string) => frame({ TID: tid, ESV: EL.GET_SNA, DETAILs: { "80": "" } });
+
+    await flush();
+    deliver(rinfo(), busy("0001"), null);
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    deliver(rinfo(), busy("0002"), null);
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    deliver(rinfo(), busy("0003"), null);
+
+    await expect(pending).rejects.toThrow(/answered no part of a get/);
+    // Three attempts, then the caller is told rather than left waiting.
+    expect(sent).toHaveLength(3);
+    client.close();
+  });
+
+  it("retries a request the device did not answer in time", async () => {
+    const { client, deliver, sent } = await createClient();
+    // Enabled only now: init() waits on a real timer for the socket to bind.
+    vi.useFakeTimers();
+
+    const pending = client.getProperties(DEVICE, AIRCON, OperationStatus);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toHaveLength(1);
+
+    // The attempt times out, then the backoff before the next one elapses.
+    await vi.advanceTimersByTimeAsync(3 * 1000);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(sent).toHaveLength(2);
+
+    deliver(rinfo(), frame({ TID: "0002", DETAILs: { "80": "30" } }), null);
+    expect(await pending).toEqual([true]);
+    client.close();
+  });
+
+  it("does not retry a write the device refused", async () => {
+    // A read is worth trying again; a write is the one thing HomeKit waits on
+    // end to end, and spending the budget on it outlasts its patience.
+    const { client, deliver, sent } = await createClient();
+    const pending = client.setProperties(DEVICE, AIRCON, write(TargetTemperature, 25));
+    await flush();
+
+    deliver(rinfo(), frame({ TID: "0001", ESV: EL.SETC_SNA, DETAILs: { b3: "" } }), null);
+    await expect(pending).rejects.toThrow(/rejected the request/);
+    expect(sent).toHaveLength(1);
+    client.close();
+  });
+
+  it("sends one request at a time to a device, and both devices at once", async () => {
+    // Asking a node for several things at once is what earns the Get_SNA above,
+    // and instances 013001 and 013005 of one air conditioner share a node.
+    const { client, deliver, sent } = await createClient();
+    const first = client.getProperties(DEVICE, AIRCON, OperationStatus);
+    const second = client.getProperties(DEVICE, [0x01, 0x30, 0x05], OperationStatus);
+    const other = client.getProperties("192.168.1.51", AIRCON, OperationStatus);
+    await flush();
+
+    expect(sent).toHaveLength(2);
+    expect(sent.map((request) => request.ip)).toEqual([DEVICE, "192.168.1.51"]);
+
+    deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "30" } }), null);
+    expect(await first).toEqual([true]);
+    deliver(rinfo("192.168.1.51"), frame({ TID: "0002", DETAILs: { "80": "30" } }), null);
+    expect(await other).toEqual([true]);
+
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    deliver(rinfo(), frame({ TID: "0003", SEOJ: "013005", DETAILs: { "80": "31" } }), null);
+    expect(await second).toEqual([false]);
     client.close();
   });
 
@@ -346,6 +437,21 @@ describe("EchonetLiteClient", () => {
     await flush();
     client.close();
     await expect(pending).rejects.toThrow(/closed/);
+  });
+
+  it("rejects a request still queued behind another when closed", async () => {
+    // Left to run, it would send on a socket that has already been released and
+    // then sit there until its own timeout expired.
+    const { client, sent } = await createClient();
+    const inFlight = client.getProperties(DEVICE, AIRCON, OperationStatus);
+    const queued = client.getProperties(DEVICE, AIRCON, TargetTemperature);
+    await flush();
+    expect(sent).toHaveLength(1);
+
+    client.close();
+    await expect(inFlight).rejects.toThrow(/closed/);
+    await expect(queued).rejects.toThrow(/closed/);
+    expect(sent).toHaveLength(1);
   });
 
   it("refuses a second initialize, which would replace the singleton's sockets", async () => {

@@ -1,10 +1,11 @@
 import type { CharacteristicValue, Characteristic, Logging, PlatformAccessory, Service } from "homebridge";
 
-import type { Property, WritableProperty } from "../echonet/codec.js";
 import { AirconOperationMode, OperationStatus, RoomTemperature, TargetTemperature } from "../echonet/codec.js";
 import type { DeviceProfile, EchonetDevice } from "../echonet/device.js";
 import { AIRCON_MODE } from "../echonet/epc.js";
 import type { ELPlatform } from "../platform.js";
+import type { StateCell, WritableStateCell } from "./device-state.js";
+import { DeviceState } from "./device-state.js";
 import type { ProfileAware } from "./profile.js";
 import { supportsGet, supportsSet } from "./profile.js";
 
@@ -13,14 +14,19 @@ export class AirConditionerAccessory implements ProfileAware {
   private readonly service: Service;
   private readonly Characteristic: typeof Characteristic;
   private readonly log: Logging;
+  private readonly state: DeviceState;
+  private readonly power: WritableStateCell<boolean>;
+  private readonly mode: WritableStateCell<number>;
+  private readonly roomTemperature: StateCell<number>;
+  private readonly targetTemperature: WritableStateCell<number>;
 
   static create(platform: ELPlatform, accessory: PlatformAccessory, device: EchonetDevice): AirConditionerAccessory {
     platform.log.info("Initializing an AC accessory:", device.logId);
     return new AirConditionerAccessory(platform, accessory, device);
   }
 
-  // Every characteristic reads through to the device, so nothing needs to be
-  // retained beyond the wiring done here.
+  // Every characteristic reads from the shared cache below, so one refresh of
+  // the accessory costs one request for all of them rather than one each.
   //
   // Only the characteristics HomeKit requires of a HeaterCooler are wired up
   // front; the optional ones wait for the property maps. See applyProfile.
@@ -34,9 +40,16 @@ export class AirConditionerAccessory implements ProfileAware {
     this.service =
       accessory.getService(platform.Service.HeaterCooler) ?? accessory.addService(platform.Service.HeaterCooler);
 
+    this.state = new DeviceState(this.log, device);
+    this.power = this.state.track(OperationStatus);
+    this.mode = this.state.track(AirconOperationMode);
+    this.roomTemperature = this.state.track(RoomTemperature);
+    this.targetTemperature = this.state.track(TargetTemperature);
+
     this.setUpActive();
     this.setUpHeaterCoolerState();
     this.setUpCurrentTemperature();
+    this.pushOnChange();
   }
 
   // HomeKit requires Active, CurrentHeaterCoolerState, TargetHeaterCoolerState
@@ -45,6 +58,8 @@ export class AirConditionerAccessory implements ProfileAware {
   // air conditioner that cannot answer for them is only noted here — their
   // getters already degrade on their own.
   applyProfile({ maps }: DeviceProfile): void {
+    this.state.applyMaps(maps);
+
     if (!supportsGet(maps, RoomTemperature)) {
       this.log.debug("AC accessory:", this.device.logId, "reports no room temperature");
     }
@@ -64,38 +79,35 @@ export class AirConditionerAccessory implements ProfileAware {
     }
   }
 
+  stop(): void {
+    this.state.stop();
+  }
+
   private setUpActive(): void {
     this.service
       .getCharacteristic(this.Characteristic.Active)
       .onSet(async (value) => {
-        await this.device.set(OperationStatus, value !== 0);
+        await this.power.write(value !== 0);
       })
       .onGet(async () => {
-        return (await this.device.get(OperationStatus)) ?? false;
+        await this.state.sync();
+        return this.activeState();
       });
+  }
+
+  // Active is a HomeKit enum rather than a boolean, so the operation status is
+  // mapped onto it rather than left for HAP to coerce.
+  private activeState(): CharacteristicValue {
+    const { Active } = this.Characteristic;
+    return this.power.get() === true ? Active.ACTIVE : Active.INACTIVE;
   }
 
   private setUpHeaterCoolerState(): void {
     const { Characteristic } = this;
 
     this.service.getCharacteristic(Characteristic.CurrentHeaterCoolerState).onGet(async () => {
-      try {
-        if (!(await this.device.get(OperationStatus))) {
-          return Characteristic.CurrentHeaterCoolerState.INACTIVE;
-        }
-      } catch (err) {
-        this.log.error("Failed to get AC operation status from", this.device.logId, err);
-        return Characteristic.CurrentHeaterCoolerState.INACTIVE;
-      }
-      try {
-        const mode = await this.device.get(AirconOperationMode);
-        return mode === AIRCON_MODE.COOL
-          ? Characteristic.CurrentHeaterCoolerState.COOLING
-          : Characteristic.CurrentHeaterCoolerState.HEATING;
-      } catch (err) {
-        this.log.error("Failed to get AC mode from", this.device.logId, err);
-        return Characteristic.CurrentHeaterCoolerState.IDLE;
-      }
+      await this.state.sync();
+      return this.currentState();
     });
 
     this.service
@@ -109,32 +121,53 @@ export class AirConditionerAccessory implements ProfileAware {
         } else if (value === Characteristic.TargetHeaterCoolerState.HEAT) {
           mode = AIRCON_MODE.HEAT;
         }
-        await this.device.set(AirconOperationMode, mode);
+        await this.mode.write(mode);
       })
       .onGet(async () => {
-        let state: CharacteristicValue = Characteristic.TargetHeaterCoolerState.AUTO;
-        try {
-          if (await this.device.get(OperationStatus)) {
-            const mode = await this.device.get(AirconOperationMode);
-            if (mode === AIRCON_MODE.COOL) {
-              state = Characteristic.TargetHeaterCoolerState.COOL;
-            } else if (mode === AIRCON_MODE.HEAT) {
-              state = Characteristic.TargetHeaterCoolerState.HEAT;
-            }
-          }
-        } catch (err) {
-          this.log.error("Failed to get TargetHeaterCoolerState from", this.device.logId, err);
-          return state;
-        }
-        return state;
+        await this.state.sync();
+        return this.targetState();
       });
+  }
+
+  // Both HeaterCooler states are read off the same two cached properties, so
+  // they are derived here rather than each fetching what it needs.
+  private currentState(): CharacteristicValue {
+    const { CurrentHeaterCoolerState } = this.Characteristic;
+    if (this.power.get() !== true) {
+      return CurrentHeaterCoolerState.INACTIVE;
+    }
+    const mode = this.mode.get();
+    if (mode == null) {
+      return CurrentHeaterCoolerState.IDLE;
+    }
+    return mode === AIRCON_MODE.COOL ? CurrentHeaterCoolerState.COOLING : CurrentHeaterCoolerState.HEATING;
+  }
+
+  private targetState(): CharacteristicValue {
+    const { TargetHeaterCoolerState } = this.Characteristic;
+    if (this.power.get() === true) {
+      const mode = this.mode.get();
+      if (mode === AIRCON_MODE.COOL) {
+        return TargetHeaterCoolerState.COOL;
+      }
+      if (mode === AIRCON_MODE.HEAT) {
+        return TargetHeaterCoolerState.HEAT;
+      }
+    }
+    return TargetHeaterCoolerState.AUTO;
   }
 
   private setUpCurrentTemperature(): void {
     this.service
       .getCharacteristic(this.Characteristic.CurrentTemperature)
       .setProps({ minValue: -127, maxValue: 125, minStep: 1 })
-      .onGet(this.temperatureGetter(RoomTemperature));
+      // Some air conditioners have no temperature sensor, and one that has not
+      // answered yet has nothing to report either. Both read as 0 °C rather
+      // than as an error, which would stop the accessory working.
+      .onGet(async () => {
+        await this.state.sync();
+        return this.roomTemperature.get() ?? 0;
+      });
   }
 
   // Both thresholds are mapped to the one target temperature the device has:
@@ -148,8 +181,13 @@ export class AirConditionerAccessory implements ProfileAware {
       this.service
         .getCharacteristic(characteristic)
         .setProps({ minValue: 0, maxValue: 50, minStep: 1 })
-        .onSet(this.temperatureSetter(TargetTemperature))
-        .onGet(this.temperatureGetter(TargetTemperature));
+        .onSet(async (value) => {
+          await this.targetTemperature.write(Math.trunc(value as number));
+        })
+        .onGet(async () => {
+          await this.state.sync();
+          return this.targetTemperature.get() ?? 0;
+        });
     }
   }
 
@@ -167,21 +205,36 @@ export class AirConditionerAccessory implements ProfileAware {
     return [this.Characteristic.CoolingThresholdTemperature, this.Characteristic.HeatingThresholdTemperature];
   }
 
-  private temperatureSetter(property: WritableProperty<number>) {
-    return async (value: CharacteristicValue) => {
-      await this.device.set(property, Math.trunc(value as number));
+  // Carries a value that arrived on its own to HomeKit: a change the device
+  // announced because it was operated by other means, e.g. its physical remote,
+  // and a read that landed after the getter waiting for it had already answered.
+  //
+  // Power and mode are pushed together because three characteristics are derived
+  // from the pair of them, and either one changing moves all three.
+  private pushOnChange(): void {
+    const pushState = (): void => {
+      const { Active, CurrentHeaterCoolerState, TargetHeaterCoolerState } = this.Characteristic;
+      this.service.updateCharacteristic(Active, this.activeState());
+      this.service.updateCharacteristic(CurrentHeaterCoolerState, this.currentState());
+      this.service.updateCharacteristic(TargetHeaterCoolerState, this.targetState());
     };
-  }
+    this.power.onChange(pushState);
+    this.mode.onChange(pushState);
 
-  private temperatureGetter(property: Property<number>) {
-    return async () => {
-      try {
-        return (await this.device.get(property)) ?? 0;
-      } catch {
-        // Some air conditioners do not have temperature sensor, reporting error
-        // would make the accessory stop working.
-        return 0;
+    this.roomTemperature.onChange((value) => {
+      if (value != null) {
+        this.service.updateCharacteristic(this.Characteristic.CurrentTemperature, value);
       }
-    };
+    });
+    this.targetTemperature.onChange((value) => {
+      if (value == null) {
+        return;
+      }
+      for (const characteristic of this.thresholdTemperatures()) {
+        if (this.service.testCharacteristic(characteristic)) {
+          this.service.updateCharacteristic(characteristic, value);
+        }
+      }
+    });
   }
 }
