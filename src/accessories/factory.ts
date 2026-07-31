@@ -1,8 +1,8 @@
 import type { PlatformAccessory } from "homebridge";
 
-import type { EchonetDevice } from "../echonet-device.js";
+import type { EchonetDevice } from "../echonet/device.js";
+import type { EOJ } from "../echonet/types.js";
 import type { ELPlatform } from "../platform.js";
-import type { EOJ } from "../types.js";
 import { AirConditionerAccessory } from "./aircon.js";
 import { LightAccessory } from "./light.js";
 

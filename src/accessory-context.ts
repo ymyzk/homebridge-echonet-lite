@@ -1,6 +1,7 @@
 import type { PlatformAccessory } from "homebridge";
 
-import type { ELAccessoryContext, EOJ } from "./types.js";
+import type { EOJ } from "./echonet/types.js";
+import type { ELAccessoryContext } from "./types.js";
 
 function isEOJ(value: unknown): value is EOJ {
   return Array.isArray(value) && value.length === 3 && value.every((v) => typeof v === "number");

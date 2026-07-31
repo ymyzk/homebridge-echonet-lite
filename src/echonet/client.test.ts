@@ -6,8 +6,8 @@ import EL from "echonet-lite";
 import type { ELData, Rinfo, UserFunc } from "echonet-lite";
 import type { Logging } from "homebridge";
 
+import { EchonetLiteClient } from "./client.js";
 import { OperationStatus, TargetTemperature } from "./codec.js";
-import { EchonetLiteClient } from "./echonet-lite.js";
 import type { EOJ } from "./types.js";
 
 const DEVICE = "192.168.1.50";

@@ -1,11 +1,11 @@
 import type { CharacteristicValue, PlatformAccessory, Service } from "homebridge";
 
-import type { Property, WritableProperty } from "../codec.js";
-import { AirconOperationMode, OperationStatus, RoomTemperature, TargetTemperature } from "../codec.js";
-import type { EchonetDevice } from "../echonet-device.js";
-import { AIRCON_MODE } from "../epc.js";
+import type { Property, WritableProperty } from "../echonet/codec.js";
+import { AirconOperationMode, OperationStatus, RoomTemperature, TargetTemperature } from "../echonet/codec.js";
+import type { EchonetDevice } from "../echonet/device.js";
+import { AIRCON_MODE } from "../echonet/epc.js";
+import { formatProperties } from "../echonet/utils.js";
 import type { ELPlatform } from "../platform.js";
-import { formatProperties } from "../utils.js";
 
 // A home air conditioner (0x01/0x30) exposed as a HomeKit HeaterCooler.
 export class AirConditionerAccessory {
