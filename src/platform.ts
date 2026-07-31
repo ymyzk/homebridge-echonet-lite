@@ -1,18 +1,15 @@
-import { setTimeout as delay } from "node:timers/promises";
-
 import type { API, Characteristic, DynamicPlatformPlugin, Logging, PlatformAccessory, Service } from "homebridge";
 
 import { createAccessoryHandler } from "./accessories/factory.js";
-import { RefreshSwitchAccessory } from "./accessories/refresh-switch.js";
+import { isRefreshSwitchAccessory, setUpRefreshSwitch } from "./accessories/refresh-switch.js";
 import { getAccessoryContext, setAccessoryContext } from "./accessory-context.js";
+import { DiscoveryController } from "./discovery.js";
 import { EchonetDevice } from "./echonet-device.js";
 import { EchonetLiteClient } from "./echonet-lite.js";
 import { SUPER_EPC } from "./epc.js";
 import { readLegacyStorage } from "./legacy-storage.js";
 import { PLATFORM_NAME, PLUGIN_NAME } from "./settings.js";
-import type { ELPlatformConfig, EOJ } from "./types.js";
-
-const DISCOVERY_TIMEOUT_MS = 10 * 1000;
+import type { DiscoveredDevice, ELPlatformConfig } from "./types.js";
 
 export class ELPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -20,11 +17,10 @@ export class ELPlatform implements DynamicPlatformPlugin {
 
   public readonly el: EchonetLiteClient;
 
+  private readonly discovery: DiscoveryController;
   private readonly accessories = new Map<string, PlatformAccessory>();
   private readonly builtAccessories = new Set<string>();
-  private refreshSwitch: RefreshSwitchAccessory | null = null;
-  private cachedRefreshSwitchAccessory: PlatformAccessory | null = null;
-  private isDiscovering = false;
+  private cachedRefreshSwitch: PlatformAccessory | null = null;
 
   constructor(
     public readonly log: Logging,
@@ -36,6 +32,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
     this.Service = api.hap.Service;
     this.Characteristic = api.hap.Characteristic;
     this.el = new EchonetLiteClient(log);
+    this.discovery = new DiscoveryController(log, this.el, (device) => void this.handleDiscoveredDevice(device));
 
     if (!this.config) {
       return;
@@ -50,48 +47,14 @@ export class ELPlatform implements DynamicPlatformPlugin {
       return;
     }
 
-    // Prepare or remove the refresh switch.
-    if (accessory.UUID === RefreshSwitchAccessory.UUID) {
-      if (this.config.enableRefreshSwitch) {
-        this.cachedRefreshSwitchAccessory = accessory;
-      } else {
-        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-      }
+    // Handled in init(), once the config says whether the switch is still wanted.
+    if (isRefreshSwitchAccessory(accessory)) {
+      this.cachedRefreshSwitch = accessory;
       return;
     }
 
     // Save the accessory and build later.
     this.accessories.set(accessory.UUID, accessory);
-  }
-
-  get discovering(): boolean {
-    return this.isDiscovering;
-  }
-
-  async startDiscovery(): Promise<void> {
-    if (this.isDiscovering) {
-      return;
-    }
-    this.setDiscovering(true);
-
-    this.log.info("Starting discovery");
-    this.el.stopMembershipRenewal();
-    this.el.startDiscovery((device) => void this.handleDiscoveredDevice(device.address, device.eoj));
-
-    await delay(DISCOVERY_TIMEOUT_MS);
-    this.stopDiscovery();
-  }
-
-  stopDiscovery(): void {
-    if (!this.isDiscovering) {
-      return;
-    }
-    this.setDiscovering(false);
-
-    // After stopping discovery, el would listen to broadcast.
-    this.log.info("Finished discovery");
-    this.el.stopDiscovery();
-    this.el.startMembershipRenewal();
   }
 
   private async init(): Promise<void> {
@@ -109,15 +72,13 @@ export class ELPlatform implements DynamicPlatformPlugin {
     }
     this.log.info("Initializing ECHONET Lite client");
 
-    if (this.config?.enableRefreshSwitch) {
-      this.buildRefreshAccessory();
-    }
+    setUpRefreshSwitch(this.api, this.discovery, this.cachedRefreshSwitch, this.config?.enableRefreshSwitch === true);
 
     // Nothing was cached, so this is a first run: scan the network to find the
     // devices instead of waiting for the refresh switch.
     if (this.accessories.size === 0) {
       this.log.info("No existing accessories found");
-      await this.startDiscovery();
+      await this.discovery.start();
       return;
     }
 
@@ -180,7 +141,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  private async handleDiscoveredDevice(address: string, eojList: EOJ[]): Promise<void> {
+  private async handleDiscoveredDevice({ address, eoj: eojList }: DiscoveredDevice): Promise<void> {
     for (const eoj of eojList) {
       // No UUID yet: it is derived from the identification number read below.
       const probe = new EchonetDevice(this.el, address, eoj);
@@ -210,20 +171,6 @@ export class ELPlatform implements DynamicPlatformPlugin {
         this.log.error("Failed to add accessory", device.logId, err);
       }
     }
-  }
-
-  private setDiscovering(value: boolean): void {
-    this.isDiscovering = value;
-    this.refreshSwitch?.updateState(value);
-  }
-
-  private buildRefreshAccessory(): void {
-    let accessory = this.cachedRefreshSwitchAccessory;
-    if (!accessory) {
-      accessory = new this.api.platformAccessory("Refresh ECHONET Lite", RefreshSwitchAccessory.UUID);
-      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-    }
-    this.refreshSwitch = new RefreshSwitchAccessory(this, accessory);
   }
 
   // Registers a newly discovered device, or refreshes the cached device info of
