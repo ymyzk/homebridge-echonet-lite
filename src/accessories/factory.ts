@@ -35,7 +35,8 @@ export function getClassName(eoj: EOJ): string | null {
 }
 
 // Builds the handler matching the device's ECHONET Lite class code.
-// Returns false when the device is unsupported or unusable.
+// Returns false when the device is unsupported, and rejects when it does not
+// answer the reads a handler needs to wire itself up.
 export async function createAccessoryHandler(
   platform: ELPlatform,
   accessory: PlatformAccessory,
@@ -43,7 +44,8 @@ export async function createAccessoryHandler(
 ): Promise<boolean> {
   const [classGroupCode, classCode] = device.eoj;
   if (classGroupCode === 0x02 && (classCode === 0x90 || classCode === 0x91)) {
-    return (await LightAccessory.create(platform, accessory, device)) !== null;
+    await LightAccessory.create(platform, accessory, device);
+    return true;
   }
   if (classGroupCode === 0x01 && classCode === 0x30) {
     AirConditionerAccessory.create(platform, accessory, device);

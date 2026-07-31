@@ -16,30 +16,6 @@ async function readSettableProperties(log: Logging, device: EchonetDevice): Prom
   return maps.set;
 }
 
-// Returns null when the device does not answer, which marks it unusable.
-async function readStatus(log: Logging, device: EchonetDevice): Promise<boolean | null> {
-  try {
-    return await device.get(OperationStatus);
-  } catch (err) {
-    log.warn("Failed to get initial status from", device.logId, err);
-    return null;
-  }
-}
-
-// Falls back to 0 so an unreadable level does not block registration.
-async function readBrightness(log: Logging, device: EchonetDevice): Promise<number> {
-  try {
-    const level = await device.get(IlluminanceLevel);
-    if (level != null) {
-      log.debug("Initialized brightness:", device.logId, level);
-      return level;
-    }
-  } catch (err) {
-    log.warn("Failed to get initial brightness from", device.logId, err);
-  }
-  return 0;
-}
-
 // A general lighting (0x02/0x90) or mono functional lighting (0x02/0x91) device
 // exposed as a HomeKit Lightbulb.
 export class LightAccessory {
@@ -49,27 +25,21 @@ export class LightAccessory {
   private status = false;
   private brightness = 0;
 
-  // Probes the device before wiring characteristics; returns null when the
-  // device does not respond so it is not registered.
+  // Reads the property maps before wiring characteristics; rejects when the
+  // device does not answer at all, so it is not registered.
   static async create(
     platform: ELPlatform,
     accessory: PlatformAccessory,
     device: EchonetDevice,
-  ): Promise<LightAccessory | null> {
+  ): Promise<LightAccessory> {
     const { log } = platform;
     log.info("Initializing a light accessory:", device.logId);
 
     const settableProperties = await readSettableProperties(log, device);
-    const status = await readStatus(log, device);
-    if (status == null) {
-      return null;
-    }
-
     const supportsBrightness = settableProperties.includes(IlluminanceLevel.epc);
-    const brightness = supportsBrightness ? await readBrightness(log, device) : 0;
-    log.info("Initialized light accessory:", device.logId, "status:", status, "brightness:", brightness);
+    log.info("Initialized light accessory:", device.logId, "brightness:", supportsBrightness);
 
-    return new LightAccessory(platform, accessory, device, supportsBrightness, status, brightness);
+    return new LightAccessory(platform, accessory, device, supportsBrightness);
   }
 
   private constructor(
@@ -77,22 +47,19 @@ export class LightAccessory {
     accessory: PlatformAccessory,
     private readonly device: EchonetDevice,
     supportsBrightness: boolean,
-    initialStatus: boolean,
-    initialBrightness: number,
   ) {
     this.Characteristic = platform.Characteristic;
     this.log = platform.log;
     this.service = accessory.getService(platform.Service.Lightbulb) ?? accessory.addService(platform.Service.Lightbulb);
 
-    this.setUpPower(initialStatus);
+    this.setUpPower();
     if (supportsBrightness) {
-      this.setUpBrightness(initialBrightness);
+      this.setUpBrightness();
     }
     this.subscribeToNotifications();
   }
 
-  private setUpPower(initialStatus: boolean): void {
-    this.updateStatus(initialStatus);
+  private setUpPower(): void {
     this.service
       .getCharacteristic(this.Characteristic.On)
       .onSet(async (value) => {
@@ -116,8 +83,7 @@ export class LightAccessory {
       });
   }
 
-  private setUpBrightness(initialBrightness: number): void {
-    this.updateBrightness(initialBrightness);
+  private setUpBrightness(): void {
     this.service
       .getCharacteristic(this.Characteristic.Brightness)
       .onSet(async (value) => {
