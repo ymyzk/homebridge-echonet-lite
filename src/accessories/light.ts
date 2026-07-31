@@ -11,8 +11,9 @@ function illuminanceLevelOf(buffer: Buffer | undefined): number | null {
   return buffer != null && buffer.length > 0 ? buffer.readUInt8(0) : null;
 }
 
-// Logs what the device supports and returns its settable properties.
-async function logPropertyMaps(log: Logging, device: EchonetDevice): Promise<number[]> {
+// Returns the settable EPCs, logging everything the device reports it supports
+// along the way.
+async function readSettableProperties(log: Logging, device: EchonetDevice): Promise<number[]> {
   const maps = (await device.getPropertyMaps()).message.data;
   log.debug("INF properties for", device.logId, formatProperties(maps?.inf));
   log.debug("Get properties for", device.logId, formatProperties(maps?.get));
@@ -62,7 +63,7 @@ export class LightAccessory {
     const { log } = platform;
     log.info("Initializing a light accessory:", device.logId);
 
-    const settableProperties = await logPropertyMaps(log, device);
+    const settableProperties = await readSettableProperties(log, device);
     const status = await readStatus(log, device);
     if (status == null) {
       return null;
