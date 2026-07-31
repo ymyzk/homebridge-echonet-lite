@@ -4,7 +4,7 @@ import type { EchonetLiteClient } from "./client.js";
 import type { Property } from "./codec.js";
 import { OperationStatus, TargetTemperature } from "./codec.js";
 import { EchonetDevice } from "./device.js";
-import type { EOJ } from "./types.js";
+import type { EOJ, EPC } from "./types.js";
 
 const ADDRESS = "192.168.1.50";
 const AIRCON: EOJ = [0x01, 0x30, 0x01];
@@ -21,7 +21,7 @@ function createDevice(values: (unknown | null)[] = []) {
 }
 
 // The EPCs the stub was asked for, in order.
-const requestedEpcs = (getProperties: ReturnType<typeof vi.fn>): number[] => {
+const requestedEpcs = (getProperties: ReturnType<typeof vi.fn>): EPC[] => {
   const [, , ...properties] = getProperties.mock.calls[0] as [string, EOJ, ...Property<unknown>[]];
   return properties.map((property) => property.epc);
 };

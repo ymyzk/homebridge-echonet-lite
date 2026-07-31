@@ -8,7 +8,7 @@ import type { Logging } from "homebridge";
 
 import { EchonetLiteClient } from "./client.js";
 import { AirconOperationMode, OperationStatus, TargetTemperature, write } from "./codec.js";
-import type { EOJ } from "./types.js";
+import type { EOJ, EPC } from "./types.js";
 
 const DEVICE = "192.168.1.50";
 const AIRCON: EOJ = [0x01, 0x30, 0x01];
@@ -260,7 +260,7 @@ describe("EchonetLiteClient", () => {
 
   it("delivers notifications only for the matching device", async () => {
     const { client, deliver } = await createClient();
-    const seen: number[][] = [];
+    const seen: EPC[][] = [];
     client.onNotify((n) => seen.push([...n.properties.keys()]));
 
     deliver(rinfo(), frame({ ESV: EL.INF, SEOJ: "013001", DEOJ: CONTROLLER, DETAILs: { "80": "30", b3: "19" } }), null);

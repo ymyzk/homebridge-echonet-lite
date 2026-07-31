@@ -1,4 +1,5 @@
 import { AIRCON_EPC, LIGHT_EPC, SUPER_EPC } from "./epc.js";
+import type { EPC } from "./types.js";
 
 // Converts between an EPC's raw EDT bytes and a usable value. The transport
 // deals only in buffers; every interpretation of those bytes lives here.
@@ -7,7 +8,7 @@ import { AIRCON_EPC, LIGHT_EPC, SUPER_EPC } from "./epc.js";
 // is only meaningful together with its device class: 0xB0 is the illuminance
 // level of a lighting object and the operation mode of an air conditioner.
 export interface Property<T> {
-  readonly epc: number;
+  readonly epc: EPC;
   // A human-readable name, used in log messages.
   readonly name: string;
   // Returns null when the device answered with an EDT that carries no usable
@@ -26,7 +27,7 @@ export interface WritableProperty<T> extends Property<T> {
 // which no single `T` can describe; `write` below checks the value against its
 // property while `T` is still known and hands back this erased form.
 export interface PropertyWrite {
-  readonly epc: number;
+  readonly epc: EPC;
   // A human-readable name, used in log messages.
   readonly name: string;
   readonly edt: Buffer;
@@ -151,7 +152,7 @@ export const RoomTemperature: Property<number> = {
 // EPC bytes. The spec's second form — a 16-byte bitmap, used once a device has
 // 16 or more properties — is normalized into this same shape by echonet-lite's
 // parseMapForm2 before it reaches us, so only one form has to be handled here.
-export function expandPropertyMap(edt: Buffer): number[] {
+export function expandPropertyMap(edt: Buffer): EPC[] {
   if (edt.length < 1) {
     return [];
   }
@@ -162,7 +163,7 @@ export function expandPropertyMap(edt: Buffer): number[] {
 
 // The three maps are read together, so they are declared as ordinary properties
 // rather than handled specially by the client.
-const propertyMap = (epc: number, name: string): Property<number[]> => ({
+const propertyMap = (epc: EPC, name: string): Property<EPC[]> => ({
   epc,
   name,
   decode: expandPropertyMap,
