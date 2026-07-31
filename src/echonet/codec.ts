@@ -53,6 +53,27 @@ export const OperationStatus: WritableProperty<boolean> = {
   },
 };
 
+// 0x82, four unsigned chars. Bytes 1-2 are unused; byte 3 carries the release
+// order as an ASCII letter ('A' = 0x41 … 'P' = 0x50) and byte 4 the revision.
+// The node profile object reuses this EPC for a different layout (major.minor
+// plus message format type), but only device objects are probed here.
+export interface StandardVersion {
+  // Release order as the spec writes it, e.g. "P".
+  release: string;
+  revision: number;
+}
+
+export const StandardVersionInformation: Property<StandardVersion> = {
+  epc: SUPER_EPC.STANDARD_VERSION_INFORMATION,
+  name: "standard version information",
+  decode(edt) {
+    if (edt.length !== 4) {
+      return null;
+    }
+    return { release: String.fromCharCode(edt.readUInt8(2)), revision: edt.readUInt8(3) };
+  },
+};
+
 // 0x83. The HomeKit accessory UUID is derived from this, so the string must
 // keep the exact shape node-echonet-lite produced: bytes 4..17 of the EDT, hex,
 // upper case. Byte 0 (lower-layer communication ID) and bytes 1-3 (manufacturer
@@ -71,6 +92,41 @@ export const IdentificationNumber: Property<string> = {
       return null;
     }
     return uid.toString("hex").toUpperCase();
+  },
+};
+
+// 0x8A, three unsigned chars: the code the ECHONET Consortium assigned to the
+// manufacturer, e.g. 0x00000B. Kept as the number the spec writes in hex, so
+// comparing against a code is `=== 0x00000b`; use `toHex(code, 6)` to log it.
+// The same three bytes appear at bytes 1-3 of the identification number above,
+// which deliberately excludes them.
+export const ManufacturerCode: Property<number> = {
+  epc: SUPER_EPC.MANUFACTURER_CODE,
+  name: "manufacturer code",
+  decode(edt) {
+    if (edt.length !== 3) {
+      return null;
+    }
+    return edt.readUIntBE(0, 3);
+  },
+};
+
+// 0x8C, twelve unsigned chars holding ASCII. The spec fixes the length and has
+// devices pad what they do not use, so the padding is stripped here rather than
+// left for callers; a device with nothing to report pads the whole field, which
+// is no value at all.
+export const ProductCode: Property<string> = {
+  epc: SUPER_EPC.PRODUCT_CODE,
+  name: "product code",
+  decode(edt) {
+    if (edt.length !== 12) {
+      return null;
+    }
+    // Devices pad with 0x00 or with spaces; either way the padding is not
+    // part of the code.
+    const end = edt.indexOf(0);
+    const code = (end === -1 ? edt : edt.subarray(0, end)).toString("ascii").trim();
+    return code === "" ? null : code;
   },
 };
 
