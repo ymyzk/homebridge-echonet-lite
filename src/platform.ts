@@ -52,24 +52,26 @@ export class ELPlatform implements DynamicPlatformPlugin {
       return;
     }
 
-    // Save the accessory and build later.
+    // A handler cannot be built yet: Homebridge restores accessories before
+    // didFinishLaunching, and building one needs a live client.
     this.accessories.set(accessory.UUID, accessory);
   }
 
   private async init(): Promise<void> {
-    this.log.info("Executing didFinishLaunching callback");
+    this.log.info("Homebridge finished launching");
 
     // Before anything that can fail, so the accessories are never left without
     // the device info that only the legacy file still holds.
     this.migrateLegacyAccessories();
 
+    this.log.info("Initializing ECHONET Lite client");
     try {
       await this.client.init();
     } catch (err) {
-      this.log.error("Error in init", err);
+      this.log.error("Failed to initialize ECHONET Lite client", err);
       return;
     }
-    this.log.info("Initializing ECHONET Lite client");
+    this.log.info("Initialized ECHONET Lite client");
 
     setUpRefreshSwitch(this.api, this.discovery, this.cachedRefreshSwitch, this.config?.enableRefreshSwitch === true);
 
@@ -88,10 +90,12 @@ export class ELPlatform implements DynamicPlatformPlugin {
   // with it, so a boot costs no discovery scan. Devices added later are picked
   // up by the refresh switch.
   private async restoreCachedAccessories(): Promise<void> {
-    this.log.info("Restoring existing accessories");
+    this.log.info("Restoring cached accessories");
 
     // Snapshot: the loop drops the accessories it cannot restore as it goes.
     for (const [uuid, accessory] of [...this.accessories]) {
+      // Live only if a refresh scan starts while this loop is still running:
+      // Homebridge publishes the bridge without waiting for this handler.
       if (this.uuidsWithHandler.has(uuid)) {
         continue;
       }
@@ -105,7 +109,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
       }
 
       const device = new EchonetDevice(this.client, context.address, context.eoj, uuid);
-      this.log.info("Adding existing accessory:", device.logId);
+      this.log.info("Restoring accessory:", device.logId);
       try {
         await this.syncAccessory(device, uuid);
       } catch (err) {
@@ -146,14 +150,16 @@ export class ELPlatform implements DynamicPlatformPlugin {
       const probe = new EchonetDevice(this.client, address, eoj);
       this.log.info("Discovered device:", probe.logId);
 
-      // Skip invalid devices.
+      // node-echonet-lite has no name for an unknown class code, and this
+      // plugin has no handler for one either, so skip it before probing.
       if (!this.client.getClassName(eoj)) {
         continue;
       }
 
       let uid: string | undefined;
       try {
-        // A stable unique ID, when the device reports one.
+        // The accessory UUID is derived from this, so an accessory survives a
+        // change of address.
         uid = (await probe.get(SUPER_EPC.IDENTIFICATION_NUMBER)).message.data?.uid;
         this.log.debug("UID for", probe.logId, "is", uid);
       } catch {
@@ -167,7 +173,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
       try {
         await this.syncAccessory(device, uuid);
       } catch (err) {
-        this.log.error("Failed to add accessory", device.logId, err);
+        this.log.error("Failed to sync accessory", device.logId, err);
       }
     }
   }
@@ -179,10 +185,14 @@ export class ELPlatform implements DynamicPlatformPlugin {
     const accessory =
       registered ?? new this.api.platformAccessory(this.client.getClassName(device.eoj) ?? "ECHONET Lite Device", uuid);
 
-    // May be called twice for the same device due to refreshing.
+    // The same device is reported again by every later scan, but the handler is
+    // built once: a second one would subscribe to notifications on top of the
+    // first.
     if (!this.uuidsWithHandler.has(uuid)) {
       if (!(await createAccessoryHandler(this, accessory, device))) {
-        // Unsupported or unusable device.
+        // Unsupported, or it did not answer. A cached accessory stays
+        // registered either way, so a device that is merely offline comes back
+        // on a later scan.
         return;
       }
       this.uuidsWithHandler.add(uuid);
@@ -193,7 +203,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
     setAccessoryContext(accessory, { address: device.address, eoj: device.eoj });
 
     if (!registered) {
-      this.log.info("Found new accessory:", device.logId);
+      this.log.info("Registering new accessory:", device.logId);
       this.accessories.set(uuid, accessory);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
     } else if (previousContext?.address !== device.address) {

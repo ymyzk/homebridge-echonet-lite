@@ -38,6 +38,9 @@ export class DiscoveryController {
     this.setDiscovering(true);
 
     this.log.info("Starting discovery");
+
+    // Renewal drops and re-adds the multicast membership, so it is paused while
+    // a scan is in flight.
     this.client.stopMembershipRenewal();
     this.client.startDiscovery(this.onObjects);
 
@@ -60,8 +63,9 @@ export class DiscoveryController {
       this.stopTimer = null;
     }
 
-    // After stopping discovery, el would listen to broadcast.
     this.log.info("Finished discovery");
+
+    // The scan is over, so resume the renewal that keeps notifications flowing.
     this.client.stopDiscovery();
     this.client.startMembershipRenewal();
   }

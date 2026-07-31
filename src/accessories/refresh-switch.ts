@@ -49,7 +49,5 @@ export function setUpRefreshSwitch(
       }
     });
 
-  // A scan ends on its own once it times out, so the switch follows the
-  // controller instead of only its own writes.
   discovery.onStateChange((isDiscovering) => service.updateCharacteristic(Characteristic.On, isDiscovering));
 }
