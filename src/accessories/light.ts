@@ -54,8 +54,8 @@ async function readBrightness(log: Logging, device: EchonetDevice): Promise<numb
 export class LightAccessory {
   private readonly service: Service;
   private readonly log: Logging;
+  private status = false;
   private brightness = 0;
-  private lastStatus: boolean;
 
   // Probes the device before wiring characteristics; returns null when the
   // device does not respond so it is not registered.
@@ -90,7 +90,6 @@ export class LightAccessory {
   ) {
     this.log = platform.log;
     this.service = accessory.getService(platform.Service.Lightbulb) ?? accessory.addService(platform.Service.Lightbulb);
-    this.lastStatus = initialStatus;
 
     this.setUpPower(initialStatus);
     if (supportsBrightness) {
@@ -100,13 +99,13 @@ export class LightAccessory {
   }
 
   private setUpPower(initialStatus: boolean): void {
-    this.service.updateCharacteristic(this.platform.Characteristic.On, initialStatus);
+    this.updateStatus(initialStatus);
     this.service
       .getCharacteristic(this.platform.Characteristic.On)
       .onSet(async (value) => {
         const status = value as boolean;
         await this.device.set(SUPER_EPC.OPERATION_STATUS, { status });
-        this.lastStatus = status;
+        this.updateStatus(status);
         this.log.info("Set status", status, "for", this.device.logId);
       })
       .onGet(async () => {
@@ -114,13 +113,13 @@ export class LightAccessory {
         try {
           const status = (await this.device.get(SUPER_EPC.OPERATION_STATUS)).message.data?.status;
           if (status != null) {
-            this.lastStatus = status;
+            this.updateStatus(status);
             this.log.debug("Got status:", this.device.logId, status);
           }
         } catch (err) {
           this.log.error("Failed to get status from", this.device.logId, err);
         }
-        return this.lastStatus;
+        return this.status;
       });
   }
 
@@ -156,7 +155,7 @@ export class LightAccessory {
         this.log.debug("Notification property:", this.device.logId, property.epc, property.edt);
 
         if (property.epc === SUPER_EPC.OPERATION_STATUS && property.edt?.status != null) {
-          this.service.updateCharacteristic(this.platform.Characteristic.On, property.edt.status);
+          this.updateStatus(property.edt.status);
           this.log.info("Received and updated status:", this.device.logId, property.edt.status);
         } else if (property.epc === LIGHT_EPC.ILLUMINANCE_LEVEL) {
           const level = parseIlluminanceLevel(property.buffer);
@@ -167,6 +166,11 @@ export class LightAccessory {
         }
       }
     });
+  }
+
+  private updateStatus(value: boolean): void {
+    this.status = value;
+    this.service.updateCharacteristic(this.platform.Characteristic.On, value);
   }
 
   private updateBrightness(value: number): void {
