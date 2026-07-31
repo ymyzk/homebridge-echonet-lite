@@ -1,5 +1,6 @@
-import assert from "node:assert/strict";
-import { beforeEach, describe, it, mock } from "node:test";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { Socket } from "node:dgram";
 
 import EL from "echonet-lite";
 import type { ELData, Rinfo, UserFunc } from "echonet-lite";
@@ -24,8 +25,8 @@ const noopLog = {
 function fakeSocket() {
   return {
     on: () => {},
-    dropMembership: mock.fn(),
-    addMembership: mock.fn(),
+    dropMembership: vi.fn(),
+    addMembership: vi.fn(),
   };
 }
 
@@ -53,51 +54,55 @@ const rinfo = (address = DEVICE): Rinfo => ({ address, family: "IPv4", port: 361
 async function createClient(): Promise<{
   client: EchonetLiteClient;
   deliver: UserFunc;
-  sent: { ip: unknown; esv: string; details: Record<string, string> }[];
+  sent: { ip: unknown; esv: string | number; details: Record<string, string> }[];
   socket: ReturnType<typeof fakeSocket>;
 }> {
-  const sent: { ip: unknown; esv: string; details: Record<string, string> }[] = [];
+  const sent: { ip: unknown; esv: string | number; details: Record<string, string> }[] = [];
   let deliver: UserFunc | undefined;
   const socket = fakeSocket();
   let tid = 0;
 
-  mock.method(EL, "initialize", (_objList: string[], userfunc: UserFunc) => {
+  vi.spyOn(EL, "initialize").mockImplementation((_objList, userfunc) => {
     deliver = userfunc;
-    return socket;
+    // Only the membership calls are ever exercised, so a handful of stubs
+    // stands in for the whole dgram socket.
+    return socket as unknown as Socket;
   });
-  mock.method(
-    EL,
-    "sendDetails",
-    (ip: unknown, _seoj: unknown, _deoj: unknown, esv: string, details: Record<string, string>) => {
-      sent.push({ ip, esv, details });
-      tid += 1;
-      return [tid >> 8, tid & 0xff];
-    },
-  );
-  mock.method(EL, "release", () => {});
-  mock.method(EL, "search", () => {});
+  vi.spyOn(EL, "sendDetails").mockImplementation((ip, _seoj, _deoj, esv, details) => {
+    sent.push({ ip, esv, details });
+    tid += 1;
+    return [tid >> 8, tid & 0xff];
+  });
+  vi.spyOn(EL, "release").mockImplementation(() => {});
+  vi.spyOn(EL, "search").mockImplementation(() => {});
 
   const client = new EchonetLiteClient(noopLog);
   await client.init();
-  assert.ok(deliver, "initialize should have been given a userfunc");
+  // A throw rather than an expect(): this narrows UserFunc | undefined so the
+  // returned object still type-checks.
+  if (!deliver) {
+    throw new Error("initialize should have been given a userfunc");
+  }
   return { client, deliver, sent, socket };
 }
 
 describe("EchonetLiteClient", () => {
-  beforeEach(() => {
-    mock.restoreAll();
+  // restoreMocks in vitest.config.ts covers the spies, but not the timers the
+  // membership renewal test enables.
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("resolves a get with the decoded property", async () => {
     const { client, deliver, sent } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
 
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].esv, EL.GET);
-    assert.deepEqual(sent[0].details, { "80": "" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].esv).toBe(EL.GET);
+    expect(sent[0].details).toEqual({ "80": "" });
 
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "30" } }), null);
-    assert.equal(await pending, true);
+    expect(await pending).toBe(true);
     client.close();
   });
 
@@ -105,7 +110,7 @@ describe("EchonetLiteClient", () => {
     const { client, deliver } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, TargetTemperature);
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { b3: "" } }), null);
-    assert.equal(await pending, null);
+    expect(await pending).toBeNull();
     client.close();
   });
 
@@ -123,7 +128,7 @@ describe("EchonetLiteClient", () => {
     // Still waiting, so the real response can still land.
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "31" } }), null);
 
-    assert.equal(await pending, false);
+    expect(await pending).toBe(false);
     client.close();
   });
 
@@ -134,7 +139,7 @@ describe("EchonetLiteClient", () => {
     deliver(rinfo(), frame({ TID: "0001", SEOJ: "029001", DETAILs: { "80": "30" } }), null);
     deliver(rinfo(), frame({ TID: "0001", SEOJ: "013001", DETAILs: { "80": "31" } }), null);
 
-    assert.equal(await pending, false);
+    expect(await pending).toBe(false);
     client.close();
   });
 
@@ -145,7 +150,7 @@ describe("EchonetLiteClient", () => {
     deliver(rinfo("192.168.1.99"), frame({ TID: "0001", DETAILs: { "80": "30" } }), null);
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { "80": "31" } }), null);
 
-    assert.equal(await pending, false);
+    expect(await pending).toBe(false);
     client.close();
   });
 
@@ -154,7 +159,7 @@ describe("EchonetLiteClient", () => {
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
 
     deliver(rinfo(), frame({ TID: "0001", ESV: EL.GET_SNA, DETAILs: { "80": "" } }), null);
-    await assert.rejects(pending, /rejected the request/);
+    await expect(pending).rejects.toThrow(/rejected the request/);
     client.close();
   });
 
@@ -162,8 +167,8 @@ describe("EchonetLiteClient", () => {
     const { client, deliver, sent } = await createClient();
     const pending = client.setProperty(DEVICE, AIRCON, TargetTemperature, 25);
 
-    assert.equal(sent[0].esv, EL.SETC);
-    assert.deepEqual(sent[0].details, { b3: "19" });
+    expect(sent[0].esv).toBe(EL.SETC);
+    expect(sent[0].details).toEqual({ b3: "19" });
 
     deliver(rinfo(), frame({ TID: "0001", ESV: EL.SET_RES, DETAILs: { b3: "" } }), null);
     await pending;
@@ -174,10 +179,10 @@ describe("EchonetLiteClient", () => {
     const { client, deliver, sent } = await createClient();
     const pending = client.getPropertyMaps(DEVICE, AIRCON);
 
-    assert.deepEqual(sent[0].details, { "9d": "", "9e": "", "9f": "" });
+    expect(sent[0].details).toEqual({ "9d": "", "9e": "", "9f": "" });
     deliver(rinfo(), frame({ TID: "0001", DETAILs: { "9d": "0280b0", "9e": "01b3", "9f": "0380b0bb" } }), null);
 
-    assert.deepEqual(await pending, { inf: [0x80, 0xb0], set: [0xb3], get: [0x80, 0xb0, 0xbb] });
+    expect(await pending).toEqual({ inf: [0x80, 0xb0], set: [0xb3], get: [0x80, 0xb0, 0xbb] });
     client.close();
   });
 
@@ -187,7 +192,7 @@ describe("EchonetLiteClient", () => {
     client.onNotify((n) => seen.push([...n.properties.keys()]));
 
     deliver(rinfo(), frame({ ESV: EL.INF, SEOJ: "013001", DEOJ: CONTROLLER, DETAILs: { "80": "30", b3: "19" } }), null);
-    assert.deepEqual(seen, [[0x80, 0xb3]]);
+    expect(seen).toEqual([[0x80, 0xb3]]);
     client.close();
   });
 
@@ -200,7 +205,7 @@ describe("EchonetLiteClient", () => {
     unsubscribe();
     deliver(rinfo(), frame({ ESV: EL.INF, DETAILs: { "80": "30" } }), null);
 
-    assert.equal(count, 1);
+    expect(count).toBe(1);
     client.close();
   });
 
@@ -215,8 +220,8 @@ describe("EchonetLiteClient", () => {
     // A retransmission of the same answer must not report the node twice.
     deliver(rinfo(), frame({ SEOJ: "0ef001", DETAILs: { d6: instanceList } }), null);
 
-    assert.equal(discovered.length, 1);
-    assert.deepEqual(discovered[0], {
+    expect(discovered).toHaveLength(1);
+    expect(discovered[0]).toEqual({
       address: DEVICE,
       eojList: [
         [0x01, 0x30, 0x01],
@@ -233,31 +238,33 @@ describe("EchonetLiteClient", () => {
     client.stopDiscovery();
 
     deliver(rinfo(), frame({ SEOJ: "0ef001", DETAILs: { d6: "01013001" } }), null);
-    assert.equal(count, 0);
+    expect(count).toBe(0);
     client.close();
   });
 
-  it("renews the multicast membership by dropping and re-adding it", async (t) => {
+  it("renews the multicast membership by dropping and re-adding it", async () => {
     const { client, socket } = await createClient();
     // init() already scheduled the renewal on the real clock, so drop that
     // interval and reschedule it once time is under this test's control.
     client.stopMembershipRenewal();
-    t.mock.timers.enable({ apis: ["setInterval"] });
+    // clearInterval has to be faked alongside setInterval: stopMembershipRenewal
+    // below has to actually cancel the fake interval for the last assertion.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     client.startMembershipRenewal();
 
-    t.mock.timers.tick(4 * 60 * 1000);
-    assert.equal(socket.dropMembership.mock.callCount(), 1);
-    assert.equal(socket.addMembership.mock.callCount(), 1);
+    vi.advanceTimersByTime(4 * 60 * 1000);
+    expect(socket.dropMembership).toHaveBeenCalledTimes(1);
+    expect(socket.addMembership).toHaveBeenCalledTimes(1);
     // Dropping before re-adding is the whole point: a membership a router has
     // silently forgotten is only restored by rejoining it.
-    assert.deepEqual(socket.dropMembership.mock.calls[0].arguments, [EL.EL_Multi, undefined]);
+    expect(socket.dropMembership.mock.calls[0]).toEqual([EL.EL_Multi, undefined]);
 
-    t.mock.timers.tick(4 * 60 * 1000);
-    assert.equal(socket.addMembership.mock.callCount(), 2);
+    vi.advanceTimersByTime(4 * 60 * 1000);
+    expect(socket.addMembership).toHaveBeenCalledTimes(2);
 
     client.stopMembershipRenewal();
-    t.mock.timers.tick(4 * 60 * 1000);
-    assert.equal(socket.addMembership.mock.callCount(), 2);
+    vi.advanceTimersByTime(4 * 60 * 1000);
+    expect(socket.addMembership).toHaveBeenCalledTimes(2);
     client.close();
   });
 
@@ -265,12 +272,12 @@ describe("EchonetLiteClient", () => {
     const { client } = await createClient();
     const pending = client.getProperty(DEVICE, AIRCON, OperationStatus);
     client.close();
-    await assert.rejects(pending, /closed/);
+    await expect(pending).rejects.toThrow(/closed/);
   });
 
   it("refuses a second initialize, which would replace the singleton's sockets", async () => {
     const { client } = await createClient();
-    await assert.rejects(client.init(), /already initialized/);
+    await expect(client.init()).rejects.toThrow(/already initialized/);
     client.close();
   });
 });
