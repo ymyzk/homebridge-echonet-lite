@@ -3,7 +3,7 @@ import type { Characteristic, Logging, PlatformAccessory, Service } from "homebr
 import type { EchonetDevice } from "../echonet-device.js";
 import { LIGHT_EPC, SUPER_EPC } from "../epc.js";
 import type { ELPlatform } from "../platform.js";
-import { formatProperties } from "../utils.js";
+import { formatProperties, toHex } from "../utils.js";
 
 // The illuminance level is read from the raw property buffer: some devices
 // answer with an EDT that node-echonet-lite does not decode into `data.level`.
@@ -25,8 +25,8 @@ async function readSettableProperties(log: Logging, device: EchonetDevice): Prom
 async function readStatus(log: Logging, device: EchonetDevice): Promise<boolean | null> {
   try {
     return (await device.getData(SUPER_EPC.OPERATION_STATUS)).status ?? null;
-  } catch {
-    log.warn("Failed to get initial status from", device.logId);
+  } catch (err) {
+    log.warn("Failed to get initial status from", device.logId, err);
     return null;
   }
 }
@@ -104,7 +104,7 @@ export class LightAccessory {
         const status = value as boolean;
         await this.device.set(SUPER_EPC.OPERATION_STATUS, { status });
         this.updateStatus(status);
-        this.log.info("Set status", status, "for", this.device.logId);
+        this.log.info("Set status:", this.device.logId, status);
       })
       .onGet(async () => {
         this.log.debug("Getting status from", this.device.logId);
@@ -128,10 +128,10 @@ export class LightAccessory {
       .onSet(async (value) => {
         const level = value as number;
         if (level === this.brightness) {
-          this.log.debug("Setting brightness no-op", level, "for", this.device.logId);
+          this.log.debug("Setting brightness no-op:", this.device.logId, level);
           return;
         }
-        this.log.debug("Setting brightness", level, "for", this.device.logId);
+        this.log.debug("Setting brightness:", this.device.logId, level);
         this.updateBrightness(level);
         await this.device.set(LIGHT_EPC.ILLUMINANCE_LEVEL, { level });
       })
@@ -150,7 +150,7 @@ export class LightAccessory {
       this.log.debug("Received a notification from", this.device.logId);
 
       for (const property of res.message.prop ?? []) {
-        this.log.debug("Notification property:", this.device.logId, property.epc, property.edt);
+        this.log.debug("Notification property:", this.device.logId, toHex(property.epc), property.edt);
 
         if (property.epc === SUPER_EPC.OPERATION_STATUS && property.edt?.status != null) {
           this.updateStatus(property.edt.status);
@@ -158,8 +158,8 @@ export class LightAccessory {
         } else if (property.epc === LIGHT_EPC.ILLUMINANCE_LEVEL) {
           const level = illuminanceLevelOf(property.buffer);
           if (level != null) {
-            this.log.info("Received and updated brightness:", this.device.logId, level);
             this.updateBrightness(level);
+            this.log.info("Received and updated brightness:", this.device.logId, level);
           }
         }
       }
