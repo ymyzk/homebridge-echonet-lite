@@ -1,31 +1,55 @@
-import type { PlatformAccessory, Service } from "homebridge";
+import type { API, PlatformAccessory } from "homebridge";
 
-import type { ELPlatform } from "../platform.js";
+import type { DiscoveryController } from "../discovery.js";
+import { PLATFORM_NAME, PLUGIN_NAME } from "../settings.js";
 
-// A switch accessory that triggers a new ECHONET Lite discovery scan.
-export class RefreshSwitchAccessory {
-  static readonly UUID = "076cc8c6-7f72-441b-81cb-d85e27386dc1";
+// The switch is not backed by a device, so there is no identification number to
+// derive a UUID from; a fixed one keeps it stable across restarts.
+const UUID = "076cc8c6-7f72-441b-81cb-d85e27386dc1";
+const NAME = "Refresh ECHONET Lite";
 
-  private readonly service: Service;
+// Tells the accessory Homebridge restored for this switch apart from the device
+// accessories, which are cached and rebuilt in a completely different way.
+export function isRefreshSwitchAccessory(accessory: PlatformAccessory): boolean {
+  return accessory.UUID === UUID;
+}
 
-  constructor(
-    private readonly platform: ELPlatform,
-    accessory: PlatformAccessory,
-  ) {
-    this.service = accessory.getService(platform.Service.Switch) ?? accessory.addService(platform.Service.Switch);
-    this.service
-      .getCharacteristic(platform.Characteristic.On)
-      .onGet(() => platform.discovering)
-      .onSet(async (value) => {
-        if (value) {
-          await platform.startDiscovery();
-        } else {
-          platform.stopDiscovery();
-        }
-      });
+// Wires up the switch that triggers a discovery scan, creating its accessory on
+// first use and removing a leftover one once the feature is turned off.
+// `cached` is the accessory Homebridge restored, when there is one.
+export function setUpRefreshSwitch(
+  api: API,
+  discovery: DiscoveryController,
+  cached: PlatformAccessory | null,
+  enabled: boolean,
+): void {
+  if (!enabled) {
+    if (cached) {
+      api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [cached]);
+    }
+    return;
   }
 
-  updateState(isDiscovering: boolean): void {
-    this.service.updateCharacteristic(this.platform.Characteristic.On, isDiscovering);
+  let accessory = cached;
+  if (!accessory) {
+    accessory = new api.platformAccessory(NAME, UUID);
+    api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
   }
+
+  const { Service, Characteristic } = api.hap;
+  const service = accessory.getService(Service.Switch) ?? accessory.addService(Service.Switch);
+  service
+    .getCharacteristic(Characteristic.On)
+    .onGet(() => discovery.discovering)
+    .onSet(async (value) => {
+      if (value) {
+        await discovery.start();
+      } else {
+        discovery.stop();
+      }
+    });
+
+  // A scan ends on its own once it times out, so the switch follows the
+  // controller instead of only its own writes.
+  discovery.onStateChange((isDiscovering) => service.updateCharacteristic(Characteristic.On, isDiscovering));
 }
