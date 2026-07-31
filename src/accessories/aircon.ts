@@ -3,6 +3,7 @@ import type { CharacteristicValue, PlatformAccessory, Service } from "homebridge
 import type { EchonetDevice } from "../echonet-device.js";
 import { AIRCON_EPC, AIRCON_MODE, SUPER_EPC } from "../epc.js";
 import type { ELPlatform } from "../platform.js";
+import { formatProperties } from "../utils.js";
 
 // A home air conditioner (0x01/0x30) exposed as a HomeKit HeaterCooler.
 export class AirConditionerAccessory {
@@ -15,6 +16,14 @@ export class AirConditionerAccessory {
   // Every characteristic reads through to the device, so nothing needs to be
   // retained beyond the wiring done here.
   private constructor(platform: ELPlatform, accessory: PlatformAccessory, device: EchonetDevice) {
+    platform.log.info("Initializing an AC accessory:", device.logId);
+    (async () => {
+      const maps = (await device.getPropertyMaps()).message.data;
+      platform.log.debug("INF properties for", device.logId, formatProperties(maps?.inf));
+      platform.log.debug("Get properties for", device.logId, formatProperties(maps?.get));
+      platform.log.debug("Set properties for", device.logId, formatProperties(maps?.set));
+    })();
+
     const { Characteristic } = platform;
     this.service =
       accessory.getService(platform.Service.HeaterCooler) ?? accessory.addService(platform.Service.HeaterCooler);
@@ -34,15 +43,17 @@ export class AirConditionerAccessory {
         if (!status) {
           return Characteristic.CurrentHeaterCoolerState.INACTIVE;
         }
-        const { compressor } = await device.getData(AIRCON_EPC.COMPRESSOR_STATUS);
-        if (!compressor) {
-          return Characteristic.CurrentHeaterCoolerState.IDLE;
-        }
+      } catch (err) {
+        platform.log.error("Failed to get AC operation status from", device.logId, err);
+        return Characteristic.CurrentHeaterCoolerState.INACTIVE;
+      }
+      try {
         const { mode } = await device.getData(AIRCON_EPC.OPERATION_MODE);
         return mode === AIRCON_MODE.COOL
           ? Characteristic.CurrentHeaterCoolerState.COOLING
           : Characteristic.CurrentHeaterCoolerState.HEATING;
       } catch (err) {
+        platform.log.error("Failed to get AC mode from", device.logId, err);
         return Characteristic.CurrentHeaterCoolerState.IDLE;
       }
     });
@@ -62,14 +73,19 @@ export class AirConditionerAccessory {
       })
       .onGet(async () => {
         let state: CharacteristicValue = Characteristic.TargetHeaterCoolerState.AUTO;
-        const { status } = await device.getData(SUPER_EPC.OPERATION_STATUS);
-        if (status) {
-          const { mode } = await device.getData(AIRCON_EPC.OPERATION_MODE);
-          if (mode === AIRCON_MODE.COOL) {
-            state = Characteristic.TargetHeaterCoolerState.COOL;
-          } else if (mode === AIRCON_MODE.HEAT) {
-            state = Characteristic.TargetHeaterCoolerState.HEAT;
+        try {
+          const { status } = await device.getData(SUPER_EPC.OPERATION_STATUS);
+          if (status) {
+            const { mode } = await device.getData(AIRCON_EPC.OPERATION_MODE);
+            if (mode === AIRCON_MODE.COOL) {
+              state = Characteristic.TargetHeaterCoolerState.COOL;
+            } else if (mode === AIRCON_MODE.HEAT) {
+              state = Characteristic.TargetHeaterCoolerState.HEAT;
+            }
           }
+        } catch (err) {
+          platform.log.error("Failed to get TargetHeaterCoolerState from", device.logId, err);
+          return state;
         }
         return state;
       });
@@ -94,12 +110,12 @@ export class AirConditionerAccessory {
     this.service
       .getCharacteristic(Characteristic.CoolingThresholdTemperature)
       .setProps({ minValue: 16, maxValue: 30, minStep: 1 })
-      .onSet(temperatureSetter(AIRCON_EPC.TARGET_COOLING_TEMPERATURE))
-      .onGet(temperatureGetter(AIRCON_EPC.TARGET_COOLING_TEMPERATURE));
+      .onSet(temperatureSetter(AIRCON_EPC.TARGET_TEMPERATURE))
+      .onGet(temperatureGetter(AIRCON_EPC.TARGET_TEMPERATURE));
     this.service
       .getCharacteristic(Characteristic.HeatingThresholdTemperature)
       .setProps({ minValue: 16, maxValue: 30, minStep: 1 })
-      .onSet(temperatureSetter(AIRCON_EPC.TARGET_HEATING_TEMPERATURE))
-      .onGet(temperatureGetter(AIRCON_EPC.TARGET_HEATING_TEMPERATURE));
+      .onSet(temperatureSetter(AIRCON_EPC.TARGET_TEMPERATURE))
+      .onGet(temperatureGetter(AIRCON_EPC.TARGET_TEMPERATURE));
   }
 }

@@ -15,12 +15,14 @@ export const LIGHT_EPC = {
 
 // Home air conditioner (0x01/0x30).
 export const AIRCON_EPC = {
+  // Required
+  AIR_FLOW_RATE: 0xa0,
   OPERATION_MODE: 0xb0,
+  TARGET_TEMPERATURE: 0xb3,
+  ROOM_TEMPERATURE: 0xbb,
+  // Optional
   TARGET_COOLING_TEMPERATURE: 0xb5,
   TARGET_HEATING_TEMPERATURE: 0xb6,
-  ROOM_TEMPERATURE: 0xbb,
-  // Decoded by the library as `compressor`; not verified against the spec.
-  COMPRESSOR_STATUS: 0xcd,
 } as const;
 
 // Values of AIRCON_EPC.OPERATION_MODE.
