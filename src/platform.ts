@@ -197,8 +197,9 @@ export class ELPlatform implements DynamicPlatformPlugin {
     // first.
     if (!this.uuidsWithHandler.has(uuid)) {
       if (!(await createAccessoryHandler(this, accessory, device))) {
-        // Unsupported, or it did not answer. A cached accessory stays
-        // registered either way, so a device that is merely offline comes back
+        // Unsupported: nothing here can drive it. A device that did not answer
+        // rejects instead, and is caught by the callers; a cached accessory
+        // stays registered either way, so one that is merely offline comes back
         // on a later scan.
         return;
       }
