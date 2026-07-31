@@ -6,3 +6,4 @@ package-lock.json
 /homebridge-plugin-template
 /test/hbConfig
 /sample*.js
+/dist-test

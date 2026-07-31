@@ -1,6 +1,5 @@
-// ECHONET Lite property codes (EPC). Each name describes the payload field
-// node-echonet-lite decodes for that code, so the names stay checkable against
-// the library rather than against a spec revision.
+// ECHONET Lite property codes (EPC), named after what the spec calls them.
+// Turning these raw codes into usable values is the codec's job; see codec.ts.
 
 // Properties every device class implements.
 export const SUPER_EPC = {

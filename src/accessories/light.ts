@@ -1,30 +1,24 @@
 import type { Characteristic, Logging, PlatformAccessory, Service } from "homebridge";
 
+import { IlluminanceLevel, OperationStatus } from "../codec.js";
 import type { EchonetDevice } from "../echonet-device.js";
-import { LIGHT_EPC, SUPER_EPC } from "../epc.js";
 import type { ELPlatform } from "../platform.js";
 import { formatProperties, toHex } from "../utils.js";
-
-// The illuminance level is read from the raw property buffer: some devices
-// answer with an EDT that node-echonet-lite does not decode into `data.level`.
-function illuminanceLevelOf(buffer: Buffer | undefined): number | null {
-  return buffer != null && buffer.length > 0 ? buffer.readUInt8(0) : null;
-}
 
 // Returns the settable EPCs, logging everything the device reports it supports
 // along the way.
 async function readSettableProperties(log: Logging, device: EchonetDevice): Promise<number[]> {
-  const maps = (await device.getPropertyMaps()).message.data;
-  log.debug("INF properties for", device.logId, formatProperties(maps?.inf));
-  log.debug("Get properties for", device.logId, formatProperties(maps?.get));
-  log.debug("Set properties for", device.logId, formatProperties(maps?.set));
-  return maps?.set ?? [];
+  const maps = await device.getPropertyMaps();
+  log.debug("INF properties for", device.logId, formatProperties(maps.inf));
+  log.debug("Get properties for", device.logId, formatProperties(maps.get));
+  log.debug("Set properties for", device.logId, formatProperties(maps.set));
+  return maps.set;
 }
 
 // Returns null when the device does not answer, which marks it unusable.
 async function readStatus(log: Logging, device: EchonetDevice): Promise<boolean | null> {
   try {
-    return (await device.getData(SUPER_EPC.OPERATION_STATUS)).status ?? null;
+    return await device.get(OperationStatus);
   } catch (err) {
     log.warn("Failed to get initial status from", device.logId, err);
     return null;
@@ -34,7 +28,7 @@ async function readStatus(log: Logging, device: EchonetDevice): Promise<boolean 
 // Falls back to 0 so an unreadable level does not block registration.
 async function readBrightness(log: Logging, device: EchonetDevice): Promise<number> {
   try {
-    const level = illuminanceLevelOf((await device.get(LIGHT_EPC.ILLUMINANCE_LEVEL)).message.prop?.[0]?.buffer);
+    const level = await device.get(IlluminanceLevel);
     if (level != null) {
       log.debug("Initialized brightness:", device.logId, level);
       return level;
@@ -70,7 +64,7 @@ export class LightAccessory {
       return null;
     }
 
-    const supportsBrightness = settableProperties.includes(LIGHT_EPC.ILLUMINANCE_LEVEL);
+    const supportsBrightness = settableProperties.includes(IlluminanceLevel.epc);
     const brightness = supportsBrightness ? await readBrightness(log, device) : 0;
     log.info("Initialized light accessory:", device.logId, "status:", status, "brightness:", brightness);
 
@@ -102,14 +96,14 @@ export class LightAccessory {
       .getCharacteristic(this.Characteristic.On)
       .onSet(async (value) => {
         const status = value as boolean;
-        await this.device.set(SUPER_EPC.OPERATION_STATUS, { status });
+        await this.device.set(OperationStatus, status);
         this.updateStatus(status);
         this.log.info("Set status:", this.device.logId, status);
       })
       .onGet(async () => {
         this.log.debug("Getting status from", this.device.logId);
         try {
-          const status = (await this.device.getData(SUPER_EPC.OPERATION_STATUS)).status;
+          const status = await this.device.get(OperationStatus);
           if (status != null) {
             this.updateStatus(status);
             this.log.debug("Got status:", this.device.logId, status);
@@ -136,13 +130,12 @@ export class LightAccessory {
         }
         this.log.debug("Setting brightness:", this.device.logId, level);
         this.updateBrightness(level);
-        await this.device.set(LIGHT_EPC.ILLUMINANCE_LEVEL, { level });
+        await this.device.set(IlluminanceLevel, level);
       })
       .onGet(async () => {
         this.log.debug("Getting brightness from", this.device.logId);
         try {
-          const res = await this.device.get(LIGHT_EPC.ILLUMINANCE_LEVEL);
-          const level = illuminanceLevelOf(res.message.prop?.[0]?.buffer);
+          const level = await this.device.get(IlluminanceLevel);
           this.log.debug("Got brightness:", this.device.logId, level);
           if (level != null) {
             this.updateBrightness(level);
@@ -157,17 +150,20 @@ export class LightAccessory {
   // Keeps HomeKit in sync when the device is operated by other means, e.g. its
   // physical remote.
   private subscribeToNotifications(): void {
-    this.device.onNotify((res) => {
+    this.device.onNotify((notification) => {
       this.log.debug("Received a notification from", this.device.logId);
 
-      for (const property of res.message.prop ?? []) {
-        this.log.debug("Notification property:", this.device.logId, toHex(property.epc), property.edt);
+      for (const [epc, edt] of notification.properties) {
+        this.log.debug("Notification property:", this.device.logId, toHex(epc), edt.toString("hex"));
 
-        if (property.epc === SUPER_EPC.OPERATION_STATUS && property.edt?.status != null) {
-          this.updateStatus(property.edt.status);
-          this.log.info("Received and updated status:", this.device.logId, property.edt.status);
-        } else if (property.epc === LIGHT_EPC.ILLUMINANCE_LEVEL) {
-          const level = illuminanceLevelOf(property.buffer);
+        if (epc === OperationStatus.epc) {
+          const status = OperationStatus.decode(edt);
+          if (status != null) {
+            this.updateStatus(status);
+            this.log.info("Received and updated status:", this.device.logId, status);
+          }
+        } else if (epc === IlluminanceLevel.epc) {
+          const level = IlluminanceLevel.decode(edt);
           if (level != null) {
             this.updateBrightness(level);
             this.log.info("Received and updated brightness:", this.device.logId, level);

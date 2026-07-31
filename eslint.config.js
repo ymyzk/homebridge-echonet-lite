@@ -2,7 +2,7 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "homebridge-plugin-template/**", "test/**", "sample*.js"] },
+  { ignores: ["dist/**", "dist-test/**", "homebridge-plugin-template/**", "test/**", "sample*.js"] },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -1,6 +1,5 @@
-import type { ELPropertyData, ELResponse } from "node-echonet-lite";
-
-import type { EchonetLiteClient } from "./echonet-lite.js";
+import type { Property, WritableProperty } from "./codec.js";
+import type { EchonetLiteClient, Notification, PropertyMaps } from "./echonet-lite.js";
 import type { EOJ } from "./types.js";
 import { eojEquals, formatDeviceId, formatDeviceRef } from "./utils.js";
 
@@ -22,34 +21,26 @@ export class EchonetDevice {
     this.logId = uuid == null ? formatDeviceRef(address, eoj) : formatDeviceId(uuid, address, eoj);
   }
 
-  get(epc: number): Promise<ELResponse> {
-    return this.client.getPropertyValue(this.address, this.eoj, epc);
+  // Resolves to null when the device answered without a usable value for the
+  // property, and rejects when it did not answer at all.
+  get<T>(property: Property<T>): Promise<T | null> {
+    return this.client.getProperty(this.address, this.eoj, property);
   }
 
-  // Unwraps the property payload, throwing when the device answered with an
-  // empty response so callers' catch-based fallbacks kick in.
-  async getData(epc: number): Promise<ELPropertyData> {
-    const data = (await this.get(epc)).message.data;
-    if (data == null) {
-      throw new Error(`Empty response data from ${this.logId}`);
-    }
-    return data;
+  set<T>(property: WritableProperty<T>, value: T): Promise<void> {
+    return this.client.setProperty(this.address, this.eoj, property, value);
   }
 
-  set(epc: number, edt: ELPropertyData): Promise<ELResponse> {
-    return this.client.setPropertyValue(this.address, this.eoj, epc, edt);
-  }
-
-  getPropertyMaps(): Promise<ELResponse> {
+  getPropertyMaps(): Promise<PropertyMaps> {
     return this.client.getPropertyMaps(this.address, this.eoj);
   }
 
   // Notifications are broadcast by every device on the network, so `listener`
-  // only sees the ones this device sent.
-  onNotify(listener: (res: ELResponse) => void): void {
-    this.client.onNotify((res) => {
-      if (res.device.address === this.address && eojEquals(this.eoj, res.message.seoj)) {
-        listener(res);
+  // only sees the ones this device sent. Returns a function that unsubscribes.
+  onNotify(listener: (notification: Notification) => void): () => void {
+    return this.client.onNotify((notification) => {
+      if (notification.address === this.address && eojEquals(this.eoj, notification.seoj)) {
+        listener(notification);
       }
     });
   }

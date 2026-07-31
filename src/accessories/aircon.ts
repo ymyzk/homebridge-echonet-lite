@@ -1,7 +1,9 @@
 import type { CharacteristicValue, PlatformAccessory, Service } from "homebridge";
 
+import type { Property, WritableProperty } from "../codec.js";
+import { AirconOperationMode, OperationStatus, RoomTemperature, TargetTemperature } from "../codec.js";
 import type { EchonetDevice } from "../echonet-device.js";
-import { AIRCON_EPC, AIRCON_MODE, SUPER_EPC } from "../epc.js";
+import { AIRCON_MODE } from "../epc.js";
 import type { ELPlatform } from "../platform.js";
 import { formatProperties } from "../utils.js";
 
@@ -17,11 +19,15 @@ export class AirConditionerAccessory {
   // retained beyond the wiring done here.
   private constructor(platform: ELPlatform, accessory: PlatformAccessory, device: EchonetDevice) {
     platform.log.info("Initializing an AC accessory:", device.logId);
-    (async () => {
-      const maps = (await device.getPropertyMaps()).message.data;
-      platform.log.debug("INF properties for", device.logId, formatProperties(maps?.inf));
-      platform.log.debug("Get properties for", device.logId, formatProperties(maps?.get));
-      platform.log.debug("Set properties for", device.logId, formatProperties(maps?.set));
+    void (async () => {
+      try {
+        const maps = await device.getPropertyMaps();
+        platform.log.debug("INF properties for", device.logId, formatProperties(maps.inf));
+        platform.log.debug("Get properties for", device.logId, formatProperties(maps.get));
+        platform.log.debug("Set properties for", device.logId, formatProperties(maps.set));
+      } catch (err) {
+        platform.log.debug("Failed to get property maps for", device.logId, err);
+      }
     })();
 
     const { Characteristic } = platform;
@@ -31,16 +37,15 @@ export class AirConditionerAccessory {
     this.service
       .getCharacteristic(Characteristic.Active)
       .onSet(async (value) => {
-        await device.set(SUPER_EPC.OPERATION_STATUS, { status: value !== 0 });
+        await device.set(OperationStatus, value !== 0);
       })
       .onGet(async () => {
-        return (await device.getData(SUPER_EPC.OPERATION_STATUS)).status ?? false;
+        return (await device.get(OperationStatus)) ?? false;
       });
 
     this.service.getCharacteristic(Characteristic.CurrentHeaterCoolerState).onGet(async () => {
       try {
-        const { status } = await device.getData(SUPER_EPC.OPERATION_STATUS);
-        if (!status) {
+        if (!(await device.get(OperationStatus))) {
           return Characteristic.CurrentHeaterCoolerState.INACTIVE;
         }
       } catch (err) {
@@ -48,7 +53,7 @@ export class AirConditionerAccessory {
         return Characteristic.CurrentHeaterCoolerState.INACTIVE;
       }
       try {
-        const { mode } = await device.getData(AIRCON_EPC.OPERATION_MODE);
+        const mode = await device.get(AirconOperationMode);
         return mode === AIRCON_MODE.COOL
           ? Characteristic.CurrentHeaterCoolerState.COOLING
           : Characteristic.CurrentHeaterCoolerState.HEATING;
@@ -69,14 +74,13 @@ export class AirConditionerAccessory {
         } else if (value === Characteristic.TargetHeaterCoolerState.HEAT) {
           mode = AIRCON_MODE.HEAT;
         }
-        await device.set(AIRCON_EPC.OPERATION_MODE, { mode });
+        await device.set(AirconOperationMode, mode);
       })
       .onGet(async () => {
         let state: CharacteristicValue = Characteristic.TargetHeaterCoolerState.AUTO;
         try {
-          const { status } = await device.getData(SUPER_EPC.OPERATION_STATUS);
-          if (status) {
-            const { mode } = await device.getData(AIRCON_EPC.OPERATION_MODE);
+          if (await device.get(OperationStatus)) {
+            const mode = await device.get(AirconOperationMode);
             if (mode === AIRCON_MODE.COOL) {
               state = Characteristic.TargetHeaterCoolerState.COOL;
             } else if (mode === AIRCON_MODE.HEAT) {
@@ -90,14 +94,13 @@ export class AirConditionerAccessory {
         return state;
       });
 
-    const temperatureSetter = (epc: number) => async (value: CharacteristicValue) => {
-      await device.set(epc, { temperature: Math.trunc(value as number) });
+    const temperatureSetter = (property: WritableProperty<number>) => async (value: CharacteristicValue) => {
+      await device.set(property, Math.trunc(value as number));
     };
-    const temperatureGetter = (epc: number) => async () => {
+    const temperatureGetter = (property: Property<number>) => async () => {
       try {
-        const { temperature } = await device.getData(epc);
-        return temperature ?? 0;
-      } catch (err) {
+        return (await device.get(property)) ?? 0;
+      } catch {
         // Some air conditioners do not have temperature sensor, reporting error
         // would make the accessory stop working.
         return 0;
@@ -106,16 +109,16 @@ export class AirConditionerAccessory {
     this.service
       .getCharacteristic(Characteristic.CurrentTemperature)
       .setProps({ minValue: -127, maxValue: 125, minStep: 1 })
-      .onGet(temperatureGetter(AIRCON_EPC.ROOM_TEMPERATURE));
+      .onGet(temperatureGetter(RoomTemperature));
     this.service
       .getCharacteristic(Characteristic.CoolingThresholdTemperature)
       .setProps({ minValue: 16, maxValue: 30, minStep: 1 })
-      .onSet(temperatureSetter(AIRCON_EPC.TARGET_TEMPERATURE))
-      .onGet(temperatureGetter(AIRCON_EPC.TARGET_TEMPERATURE));
+      .onSet(temperatureSetter(TargetTemperature))
+      .onGet(temperatureGetter(TargetTemperature));
     this.service
       .getCharacteristic(Characteristic.HeatingThresholdTemperature)
       .setProps({ minValue: 16, maxValue: 30, minStep: 1 })
-      .onSet(temperatureSetter(AIRCON_EPC.TARGET_TEMPERATURE))
-      .onGet(temperatureGetter(AIRCON_EPC.TARGET_TEMPERATURE));
+      .onSet(temperatureSetter(TargetTemperature))
+      .onGet(temperatureGetter(TargetTemperature));
   }
 }
