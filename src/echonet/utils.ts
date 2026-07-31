@@ -1,4 +1,4 @@
-import type { EOJ } from "./types.js";
+import type { EOJ, EPC } from "./types.js";
 
 // ECHONET Lite identifiers (class codes, instance codes, EPCs) are defined in
 // hex by the spec, so log them the same way instead of as decimal numbers.
@@ -6,8 +6,8 @@ export function toHex(value: number, width = 2): string {
   return `0x${value.toString(16).padStart(width, "0")}`;
 }
 
-// A property map (a list of EPCs) rendered as hex for logging, e.g. "[0x80, 0xb0]".
-export function formatProperties(properties: number[] | undefined): string {
+// A property map rendered as hex for logging, e.g. "[0x80, 0xb0]".
+export function formatProperties(properties: EPC[] | undefined): string {
   return `[${(properties ?? []).map((epc) => toHex(epc)).join(", ")}]`;
 }
 

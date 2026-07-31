@@ -6,7 +6,7 @@ import type { Logging } from "homebridge";
 import pLimit from "p-limit";
 
 import type { Property, PropertyWrite } from "./codec.js";
-import type { DiscoveredObjects, EOJ } from "./types.js";
+import type { DiscoveredObjects, EOJ, EPC } from "./types.js";
 import { formatEOJ } from "./utils.js";
 
 const REJOIN_INTERVAL_MS = 4 * 60 * 1000;
@@ -36,8 +36,8 @@ export type PropertyValues<P extends readonly Property<unknown>[]> = {
 export interface Notification {
   address: string;
   seoj: EOJ;
-  // Keyed by EPC, holding the raw EDT. Callers decode the ones they care about.
-  properties: Map<number, Buffer>;
+  // Holds the raw EDT. Callers decode the ones they care about.
+  properties: Map<EPC, Buffer>;
 }
 
 interface Pending {
@@ -52,7 +52,7 @@ function toEOJ(hex: string): EOJ | null {
   return bytes.length >= 3 ? [bytes[0], bytes[1], bytes[2]] : null;
 }
 
-function epcKey(epc: number): string {
+function epcKey(epc: EPC): string {
   return epc.toString(16).padStart(2, "0");
 }
 
@@ -320,7 +320,7 @@ export class EchonetLiteClient {
       return;
     }
 
-    const properties = new Map<number, Buffer>();
+    const properties = new Map<EPC, Buffer>();
     for (const [epc, edt] of Object.entries(els.DETAILs)) {
       if (edt !== "") {
         properties.set(parseInt(epc, 16), Buffer.from(edt, "hex"));

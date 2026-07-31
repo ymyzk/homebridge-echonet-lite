@@ -2,12 +2,13 @@ import type { Characteristic, Logging, PlatformAccessory, Service } from "homebr
 
 import { IlluminanceLevel, OperationStatus } from "../echonet/codec.js";
 import type { EchonetDevice } from "../echonet/device.js";
+import type { EPC } from "../echonet/types.js";
 import { formatProperties, toHex } from "../echonet/utils.js";
 import type { ELPlatform } from "../platform.js";
 
 // Returns the settable EPCs, logging everything the device reports it supports
 // along the way.
-async function readSettableProperties(log: Logging, device: EchonetDevice): Promise<number[]> {
+async function readSettableProperties(log: Logging, device: EchonetDevice): Promise<EPC[]> {
   const maps = await device.getPropertyMaps();
   log.debug("INF properties for", device.logId, formatProperties(maps.inf));
   log.debug("Get properties for", device.logId, formatProperties(maps.get));

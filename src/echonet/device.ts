@@ -1,14 +1,14 @@
 import type { EchonetLiteClient, Notification, PropertyValues } from "./client.js";
 import type { Property, PropertyWrite, WritableProperty } from "./codec.js";
 import { GetPropertyMap, InfPropertyMap, SetPropertyMap, write } from "./codec.js";
-import type { EOJ } from "./types.js";
+import type { EOJ, EPC } from "./types.js";
 import { eojEquals, formatDeviceId, formatDeviceRef } from "./utils.js";
 
-// The properties a device reports it supports, as EPC lists.
+// The properties a device reports it supports.
 export interface PropertyMaps {
-  inf: number[];
-  set: number[];
-  get: number[];
+  inf: EPC[];
+  set: EPC[];
+  get: EPC[];
 }
 
 // A single ECHONET Lite object bound to the client that talks to it. Accessory
