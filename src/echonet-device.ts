@@ -26,6 +26,16 @@ export class EchonetDevice {
     return this.client.getPropertyValue(this.address, this.eoj, epc);
   }
 
+  // Unwraps the property payload, throwing when the device answered with an
+  // empty response so callers' catch-based fallbacks kick in.
+  async getData(epc: number): Promise<ELPropertyData> {
+    const data = (await this.get(epc)).message.data;
+    if (data == null) {
+      throw new Error(`Empty response data from ${this.logId}`);
+    }
+    return data;
+  }
+
   set(epc: number, edt: ELPropertyData): Promise<ELResponse> {
     return this.client.setPropertyValue(this.address, this.eoj, epc, edt);
   }

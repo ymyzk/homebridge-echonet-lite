@@ -28,7 +28,7 @@ async function logPropertyMaps(log: Logging, device: EchonetDevice): Promise<num
 // Returns null when the device does not answer, which marks it unusable.
 async function readStatus(log: Logging, device: EchonetDevice): Promise<boolean | null> {
   try {
-    return (await device.get(SUPER_EPC.OPERATION_STATUS)).message.data?.status ?? null;
+    return (await device.getData(SUPER_EPC.OPERATION_STATUS)).status ?? null;
   } catch {
     log.warn("Failed to get initial status from", device.logId);
     return null;
@@ -111,7 +111,7 @@ export class LightAccessory {
       .onGet(async () => {
         this.log.debug("Getting status from", this.device.logId);
         try {
-          const status = (await this.device.get(SUPER_EPC.OPERATION_STATUS)).message.data?.status;
+          const status = (await this.device.getData(SUPER_EPC.OPERATION_STATUS)).status;
           if (status != null) {
             this.updateStatus(status);
             this.log.debug("Got status:", this.device.logId, status);
