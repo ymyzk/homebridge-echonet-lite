@@ -112,12 +112,12 @@ export class AirConditionerAccessory {
       .onGet(temperatureGetter(RoomTemperature));
     this.service
       .getCharacteristic(Characteristic.CoolingThresholdTemperature)
-      .setProps({ minValue: 16, maxValue: 30, minStep: 1 })
+      .setProps({ minValue: 0, maxValue: 50, minStep: 1 })
       .onSet(temperatureSetter(TargetTemperature))
       .onGet(temperatureGetter(TargetTemperature));
     this.service
       .getCharacteristic(Characteristic.HeatingThresholdTemperature)
-      .setProps({ minValue: 16, maxValue: 30, minStep: 1 })
+      .setProps({ minValue: 0, maxValue: 50, minStep: 1 })
       .onSet(temperatureSetter(TargetTemperature))
       .onGet(temperatureGetter(TargetTemperature));
   }
