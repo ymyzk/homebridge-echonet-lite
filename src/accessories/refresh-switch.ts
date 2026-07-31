@@ -1,6 +1,6 @@
 import type { API, PlatformAccessory } from "homebridge";
 
-import type { DiscoveryController } from "../discovery.js";
+import type { DiscoveryController } from "../echonet/discovery.js";
 import { PLATFORM_NAME, PLUGIN_NAME } from "../settings.js";
 
 // The switch is not backed by a device, so there is no identification number to

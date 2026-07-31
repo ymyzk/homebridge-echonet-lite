@@ -1,6 +1,6 @@
 import type { Logging } from "homebridge";
 
-import type { EchonetLiteClient } from "./echonet-lite.js";
+import type { EchonetLiteClient } from "./client.js";
 import type { DiscoveredObjects } from "./types.js";
 
 const DISCOVERY_DURATION_MS = 10 * 1000;

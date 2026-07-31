@@ -1,9 +1,9 @@
 import type { Characteristic, Logging, PlatformAccessory, Service } from "homebridge";
 
-import { IlluminanceLevel, OperationStatus } from "../codec.js";
-import type { EchonetDevice } from "../echonet-device.js";
+import { IlluminanceLevel, OperationStatus } from "../echonet/codec.js";
+import type { EchonetDevice } from "../echonet/device.js";
+import { formatProperties, toHex } from "../echonet/utils.js";
 import type { ELPlatform } from "../platform.js";
-import { formatProperties, toHex } from "../utils.js";
 
 // Returns the settable EPCs, logging everything the device reports it supports
 // along the way.

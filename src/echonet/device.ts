@@ -1,5 +1,5 @@
+import type { EchonetLiteClient, Notification, PropertyMaps } from "./client.js";
 import type { Property, WritableProperty } from "./codec.js";
-import type { EchonetLiteClient, Notification, PropertyMaps } from "./echonet-lite.js";
 import type { EOJ } from "./types.js";
 import { eojEquals, formatDeviceId, formatDeviceRef } from "./utils.js";
 

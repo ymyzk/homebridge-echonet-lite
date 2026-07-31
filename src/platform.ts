@@ -3,13 +3,14 @@ import type { API, Characteristic, DynamicPlatformPlugin, Logging, PlatformAcces
 import { createAccessoryHandler, getClassName, isSupportedEOJ } from "./accessories/factory.js";
 import { isRefreshSwitchAccessory, setUpRefreshSwitch } from "./accessories/refresh-switch.js";
 import { getAccessoryContext, setAccessoryContext } from "./accessory-context.js";
-import { IdentificationNumber } from "./codec.js";
-import { DiscoveryController } from "./discovery.js";
-import { EchonetDevice } from "./echonet-device.js";
-import { EchonetLiteClient } from "./echonet-lite.js";
+import { EchonetLiteClient } from "./echonet/client.js";
+import { IdentificationNumber } from "./echonet/codec.js";
+import { EchonetDevice } from "./echonet/device.js";
+import { DiscoveryController } from "./echonet/discovery.js";
+import type { DiscoveredObjects } from "./echonet/types.js";
 import { readLegacyStorage } from "./legacy-storage.js";
 import { PLATFORM_NAME, PLUGIN_NAME } from "./settings.js";
-import type { DiscoveredObjects, ELPlatformConfig } from "./types.js";
+import type { ELPlatformConfig } from "./types.js";
 
 export class ELPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
