@@ -45,6 +45,10 @@ export class ELPlatform implements DynamicPlatformPlugin {
     // would otherwise have to wait for.
     this.api.on("shutdown", () => {
       this.discovery.stop();
+      // Before the client goes: the handlers unsubscribe through it.
+      for (const handler of this.handlers.values()) {
+        handler.stop();
+      }
       this.client.close();
     });
   }

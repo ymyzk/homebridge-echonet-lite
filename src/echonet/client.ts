@@ -3,16 +3,26 @@ import type { Socket } from "node:dgram";
 import EL from "echonet-lite";
 import type { ELData, Rinfo } from "echonet-lite";
 import type { Logging } from "homebridge";
-import pLimit from "p-limit";
 
 import type { Property, PropertyWrite } from "./codec.js";
+import { RequestScheduler } from "./scheduler.js";
 import type { DiscoveredObjects, EOJ, EPC } from "./types.js";
 import { formatEOJ } from "./utils.js";
 
 const REJOIN_INTERVAL_MS = 4 * 60 * 1000;
-// How long a request waits for its response before it is given up on, so an
-// unresponsive device does not hold a queue slot forever.
-const REQUEST_TIMEOUT_MS = 15 * 1000;
+// How long one attempt waits for its response before it is given up on. This
+// bounds an attempt rather than the whole request: a device that does not answer
+// is retried below, and only its own queue is held up while that happens.
+const REQUEST_TIMEOUT_MS = 3 * 1000;
+
+// How many times a read is put on the wire before it is reported as failed.
+// Devices answer a request they are too busy for rather than dropping it, so a
+// retry is usually all that is needed.
+const REQUEST_ATTEMPTS = 3;
+// Backed off by a factor of three between attempts, with full jitter so several
+// devices recovering at once do not line up.
+const RETRY_BASE_DELAY_MS = 300;
+const RETRY_MAX_DELAY_MS = 2 * 1000;
 
 // This plugin acts as a controller object.
 const CONTROLLER_EOJ = "05ff01";
@@ -40,11 +50,28 @@ export interface Notification {
   properties: Map<EPC, Buffer>;
 }
 
+// A failure the device is expected to recover from on its own: it was busy, or
+// it did not answer in time. Distinguished from a refusal so that only the ones
+// worth trying again are retried.
+export class TransientRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransientRequestError";
+  }
+}
+
 interface Pending {
   eoj: string;
   resolve: (details: Record<string, string>) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function retryDelay(attempt: number): number {
+  const ceiling = Math.min(RETRY_BASE_DELAY_MS * Math.pow(3, attempt - 1), RETRY_MAX_DELAY_MS);
+  return Math.random() * ceiling;
 }
 
 function toEOJ(hex: string): EOJ | null {
@@ -58,12 +85,12 @@ function epcKey(epc: EPC): string {
 
 // Typed, promisified wrapper around echonet-lite. The library is fire-and-forget
 // with a single callback for every inbound packet, so matching a response to its
-// request happens here. Get/set requests are funneled through queues to avoid
-// flooding devices, and everything below is raw EDT: interpreting those bytes is
-// the codec's job.
+// request happens here. Requests are serialized per device to avoid flooding it,
+// and everything below is raw EDT: interpreting those bytes is the codec's job.
 export class EchonetLiteClient {
-  private readonly getQueue = pLimit(50);
-  private readonly setQueue = pLimit(1);
+  // Reads and writes share one queue per address: what a node cannot do is
+  // handle two frames at once, whichever direction they go in.
+  private readonly scheduler = new RequestScheduler();
   private readonly pending = new Map<string, Pending>();
   private readonly notifyListeners = new Set<(notification: Notification) => void>();
   private discoveryListener: ((objects: DiscoveredObjects) => void) | null = null;
@@ -105,6 +132,10 @@ export class EchonetLiteClient {
 
   close(): void {
     this.stopMembershipRenewal();
+    // Before the pending map is emptied: a request still waiting for a queue
+    // slot would otherwise be dispatched afterwards and send on a released
+    // socket, which never answers and only fails once its timeout expires.
+    this.scheduler.close();
     for (const [key, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.reject(new Error("ECHONET Lite client closed"));
@@ -144,8 +175,12 @@ export class EchonetLiteClient {
       return [] as unknown as PropertyValues<P>;
     }
 
-    const details = await this.getQueue(() =>
-      this.request(address, eoj, EL.GET, Object.fromEntries(properties.map((property) => [epcKey(property.epc), ""]))),
+    const details = await this.send(
+      address,
+      eoj,
+      EL.GET,
+      Object.fromEntries(properties.map((property) => [epcKey(property.epc), ""])),
+      REQUEST_ATTEMPTS,
     );
 
     // TypeScript cannot see that mapping over the tuple preserves its shape.
@@ -164,13 +199,15 @@ export class EchonetLiteClient {
     if (writes.length === 0) {
       return;
     }
-    await this.setQueue(() =>
-      this.request(
-        address,
-        eoj,
-        EL.SETC,
-        Object.fromEntries(writes.map((entry) => [epcKey(entry.epc), entry.edt.toString("hex")])),
-      ),
+    // Written once, not retried: a write is the one path HomeKit waits on end to
+    // end, and spending the retry budget on it would take longer than HomeKit is
+    // willing to wait for the switch it just flipped.
+    await this.send(
+      address,
+      eoj,
+      EL.SETC,
+      Object.fromEntries(writes.map((entry) => [epcKey(entry.epc), entry.edt.toString("hex")])),
+      1,
     );
   }
 
@@ -213,6 +250,32 @@ export class EchonetLiteClient {
     this.log.info("Cleared multicast membership renewal timer");
   }
 
+  // Takes a slot in the device's queue and holds it for however many attempts
+  // the request is worth. Retrying inside the slot rather than around it keeps a
+  // retry ahead of the requests that queued up behind it, which is what makes
+  // the attempts land close enough together to be worth making.
+  private send(
+    address: string,
+    eoj: EOJ,
+    esv: string,
+    details: Record<string, string>,
+    attempts: number,
+  ): Promise<Record<string, string>> {
+    return this.scheduler.run(address, async () => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await this.request(address, eoj, esv, details);
+        } catch (err) {
+          if (attempt >= attempts || !(err instanceof TransientRequestError)) {
+            throw err;
+          }
+          this.log.debug("Retrying a request to", address, formatEOJ(eoj), `(attempt ${attempt + 1}):`, err.message);
+          await sleep(retryDelay(attempt));
+        }
+      }
+    });
+  }
+
   // Sends one request and resolves with the DETAILs of its response. The
   // transaction ID the library returns is a copy of the counter it put on the
   // wire, so it stays valid as a key while later requests bump that counter.
@@ -238,7 +301,7 @@ export class EchonetLiteClient {
 
       const timer = setTimeout(() => {
         this.pending.delete(key);
-        reject(new Error(`Timed out waiting for ${address} ${eojHex} after ${REQUEST_TIMEOUT_MS}ms`));
+        reject(new TransientRequestError(`Timed out waiting for ${address} ${eojHex} after ${REQUEST_TIMEOUT_MS}ms`));
       }, REQUEST_TIMEOUT_MS);
 
       this.pending.set(key, {
@@ -294,15 +357,27 @@ export class EchonetLiteClient {
     }
 
     if (isError) {
-      // A Get_SNA is a partial answer rather than a failure: the properties the
-      // device could not answer come back with an empty EDT, which reads as no
-      // usable value just like any other empty one. Anything the device did
-      // answer is still worth having, and one unsupported EPC must not cost the
-      // caller the other properties in the same request. A refused write is a
-      // real failure, so the Set service codes keep rejecting.
+      // A Get_SNA that still carries a value for something is a partial answer
+      // rather than a failure: the properties the device could not answer come
+      // back with an empty EDT, which reads as no usable value just like any
+      // other empty one. Anything the device did answer is still worth having,
+      // and one unsupported EPC must not cost the caller the other properties in
+      // the same request.
+      //
+      // A Get_SNA carrying nothing at all is different. That is what a device
+      // says when it is too busy to look any of them up, and taking it at face
+      // value would report every property as unavailable — which downstream
+      // reads as an air conditioner that is switched off. It is retried instead.
+      //
+      // A refused write is a real failure either way, so the Set service codes
+      // keep rejecting.
       if (els.ESV === EL.GET_SNA) {
-        this.log.warn("Device", rinfo.address, els.SEOJ, "could not answer part of a get");
-        entry.resolve(els.DETAILs);
+        if (Object.values(els.DETAILs).some((edt) => edt !== "")) {
+          this.log.debug("Device", rinfo.address, els.SEOJ, "could not answer part of a get");
+          entry.resolve(els.DETAILs);
+          return;
+        }
+        entry.reject(new TransientRequestError(`Device ${rinfo.address} ${els.SEOJ} answered no part of a get`));
         return;
       }
       entry.reject(new Error(`Device ${rinfo.address} ${els.SEOJ} rejected the request (ESV ${els.ESV})`));

@@ -32,18 +32,23 @@ export function supportsNotify(maps: PropertyMaps, property: Property<unknown>):
 // that was never added, must both be no-ops.
 export interface ProfileAware {
   applyProfile(profile: DeviceProfile): void;
+  // Releases whatever the handler subscribed to. Optional: an accessory that
+  // holds nothing has nothing to release.
+  stop?(): void;
 }
 
 // What the platform holds on to for each accessory it has wired up.
 export interface AccessoryHandler {
   refreshProfile(): void;
+  stop(): void;
 }
 
 // Reads the device profile in the background and hands it to the accessory.
 //
 // Nothing here is awaited by the caller, and that is the point: an unreachable
-// device costs a 15 second timeout, accessories are restored one after another,
-// and Homebridge publishes the bridge without waiting for any of it. Blocking
+// device costs the client's whole retry budget, accessories are restored one
+// after another, and Homebridge publishes the bridge without waiting for any of
+// it. Blocking
 // setup on this read would delay every accessory behind an offline one. So the
 // accessory wires up its required characteristics immediately and gets the
 // profile when it arrives — or keeps whatever it was restored with, if the
@@ -73,6 +78,10 @@ export class ProfileLoader implements AccessoryHandler {
     void this.load().finally(() => {
       this.pending = false;
     });
+  }
+
+  stop(): void {
+    this.handler.stop?.();
   }
 
   private async load(): Promise<void> {

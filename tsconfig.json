@@ -14,7 +14,8 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["src"],
-  // Tests run straight from TypeScript via node --test, so they are never
-  // compiled into the published dist/.
-  "exclude": ["src/**/*.test.ts"]
+  // Tests and their helpers run straight from TypeScript under vitest, so they
+  // are never compiled into the published dist/. The helpers matter as much as
+  // the tests here: they import vitest, which is not a runtime dependency.
+  "exclude": ["src/**/*.test.ts", "src/**/*.test-helpers.ts"]
 }

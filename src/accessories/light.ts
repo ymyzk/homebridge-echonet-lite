@@ -2,8 +2,9 @@ import type { Characteristic, Logging, PlatformAccessory, Service } from "homebr
 
 import { IlluminanceLevel, OperationStatus } from "../echonet/codec.js";
 import type { DeviceProfile, EchonetDevice } from "../echonet/device.js";
-import { toHex } from "../echonet/utils.js";
 import type { ELPlatform } from "../platform.js";
+import type { WritableStateCell } from "./device-state.js";
+import { DeviceState } from "./device-state.js";
 import type { ProfileAware } from "./profile.js";
 import { supportsSet } from "./profile.js";
 
@@ -13,8 +14,9 @@ export class LightAccessory implements ProfileAware {
   private readonly service: Service;
   private readonly Characteristic: typeof Characteristic;
   private readonly log: Logging;
-  private status = false;
-  private brightness = 0;
+  private readonly state: DeviceState;
+  private readonly status: WritableStateCell<boolean>;
+  private readonly brightness: WritableStateCell<number>;
 
   static create(platform: ELPlatform, accessory: PlatformAccessory, device: EchonetDevice): LightAccessory {
     platform.log.info("Initializing a light accessory:", device.logId);
@@ -32,13 +34,22 @@ export class LightAccessory implements ProfileAware {
     this.log = platform.log;
     this.service = accessory.getService(platform.Service.Lightbulb) ?? accessory.addService(platform.Service.Lightbulb);
 
+    // Both properties are tracked from the start, whether or not a
+    // characteristic ends up exposing them: they cost nothing until something
+    // reads them, and they then travel in the same request.
+    this.state = new DeviceState(this.log, device);
+    this.status = this.state.track(OperationStatus);
+    this.brightness = this.state.track(IlluminanceLevel);
+
     this.setUpPower();
-    this.subscribeToNotifications();
+    this.pushOnChange();
   }
 
   // A restored accessory keeps the Brightness it was cached with until the
   // device says otherwise, so a light that is merely offline is left alone.
   applyProfile({ maps }: DeviceProfile): void {
+    this.state.applyMaps(maps);
+
     const supportsBrightness = supportsSet(maps, IlluminanceLevel);
     this.log.debug("Light accessory:", this.device.logId, "brightness:", supportsBrightness);
     if (supportsBrightness) {
@@ -48,27 +59,21 @@ export class LightAccessory implements ProfileAware {
     }
   }
 
+  stop(): void {
+    this.state.stop();
+  }
+
   private setUpPower(): void {
     this.service
       .getCharacteristic(this.Characteristic.On)
       .onSet(async (value) => {
         const status = value as boolean;
-        await this.device.set(OperationStatus, status);
-        this.updateStatus(status);
-        this.log.info("Set status:", this.device.logId, status);
+        await this.status.write(status);
+        this.log.debug("Set status:", this.device.logId, status);
       })
       .onGet(async () => {
-        this.log.debug("Getting status from", this.device.logId);
-        try {
-          const status = await this.device.get(OperationStatus);
-          if (status != null) {
-            this.updateStatus(status);
-            this.log.debug("Got status:", this.device.logId, status);
-          }
-        } catch (err) {
-          this.log.error("Failed to get status from", this.device.logId, err);
-        }
-        return this.status;
+        await this.state.sync();
+        return this.status.get() ?? false;
       });
   }
 
@@ -80,29 +85,20 @@ export class LightAccessory implements ProfileAware {
       .getCharacteristic(this.Characteristic.Brightness)
       .onSet(async (value) => {
         const level = value as number;
-        // Dragging the brightness slider sends a write per step and sets run
-        // one at a time, so the cache is updated before the write rather than
-        // after it: the repeats are dropped here instead of queueing up.
-        if (level === this.brightness) {
+        // Dragging the brightness slider sends a write per step and writes to
+        // one device run one at a time, so the repeats are dropped here rather
+        // than left to queue up. The cache is already current for them: a write
+        // updates it before going out.
+        if (level === this.brightness.get()) {
           this.log.debug("Setting brightness no-op:", this.device.logId, level);
           return;
         }
         this.log.debug("Setting brightness:", this.device.logId, level);
-        this.updateBrightness(level);
-        await this.device.set(IlluminanceLevel, level);
+        await this.brightness.write(level);
       })
       .onGet(async () => {
-        this.log.debug("Getting brightness from", this.device.logId);
-        try {
-          const level = await this.device.get(IlluminanceLevel);
-          this.log.debug("Got brightness:", this.device.logId, level);
-          if (level != null) {
-            this.updateBrightness(level);
-          }
-        } catch (err) {
-          this.log.error("Failed to get brightness from", this.device.logId, err);
-        }
-        return this.brightness;
+        await this.state.sync();
+        return this.brightness.get() ?? 0;
       });
   }
 
@@ -116,43 +112,21 @@ export class LightAccessory implements ProfileAware {
     }
   }
 
-  // Keeps HomeKit in sync when the device is operated by other means, e.g. its
-  // physical remote.
-  private subscribeToNotifications(): void {
-    this.device.onNotify((notification) => {
-      this.log.debug("Received a notification from", this.device.logId);
-
-      for (const [epc, edt] of notification.properties) {
-        this.log.debug("Notification property:", this.device.logId, toHex(epc), edt.toString("hex"));
-
-        if (epc === OperationStatus.epc) {
-          const status = OperationStatus.decode(edt);
-          if (status != null) {
-            this.updateStatus(status);
-            this.log.info("Received and updated status:", this.device.logId, status);
-          }
-        } else if (epc === IlluminanceLevel.epc) {
-          const level = IlluminanceLevel.decode(edt);
-          if (level != null) {
-            this.updateBrightness(level);
-            this.log.info("Received and updated brightness:", this.device.logId, level);
-          }
-        }
+  // Carries a value that arrived on its own to HomeKit: a change the device
+  // announced because it was operated by other means, e.g. its physical remote,
+  // and a read that landed after the getter waiting for it had already answered.
+  private pushOnChange(): void {
+    this.status.onChange((value) => {
+      if (value != null) {
+        this.service.updateCharacteristic(this.Characteristic.On, value);
       }
     });
-  }
-
-  private updateStatus(value: boolean): void {
-    this.status = value;
-    this.service.updateCharacteristic(this.Characteristic.On, value);
-  }
-
-  private updateBrightness(value: number): void {
-    this.brightness = value;
-    // A light that reports no settable brightness has no Brightness to update;
-    // pushing to one HomeKit does not know about only earns a warning.
-    if (this.service.testCharacteristic(this.Characteristic.Brightness)) {
-      this.service.updateCharacteristic(this.Characteristic.Brightness, value);
-    }
+    this.brightness.onChange((value) => {
+      // A light that reports no settable brightness has no Brightness to
+      // update; pushing to one HomeKit does not know about only earns a warning.
+      if (value != null && this.service.testCharacteristic(this.Characteristic.Brightness)) {
+        this.service.updateCharacteristic(this.Characteristic.Brightness, value);
+      }
+    });
   }
 }
