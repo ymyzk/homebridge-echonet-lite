@@ -13,5 +13,8 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests run straight from TypeScript via node --test, so they are never
+  // compiled into the published dist/.
+  "exclude": ["src/**/*.test.ts"]
 }

@@ -43,6 +43,7 @@ The plugin is written in TypeScript and compiled to `dist/` before publishing.
 ```sh
 npm install
 npm run build         # compile src/ to dist/
+npm run test          # unit tests (node:test)
 npm run lint          # ESLint (code-quality rules)
 npm run format:check  # Prettier (formatting)
 npm run watch         # rebuild on change and run a local Homebridge against test/hbConfig

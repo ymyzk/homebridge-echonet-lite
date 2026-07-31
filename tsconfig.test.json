@@ -1,0 +1,15 @@
+// Compiles the sources together with their tests into a throwaway directory so
+// `node --test` can run them. Tests cannot run straight from TypeScript because
+// Node's type stripping does not resolve the `.js` import specifiers that
+// `nodenext` requires, and they are kept out of `dist/` so they are never
+// published.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src"],
+  "exclude": []
+}

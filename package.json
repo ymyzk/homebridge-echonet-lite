@@ -20,6 +20,7 @@
   "license": "CC-BY-NC-SA-4.0",
   "scripts": {
     "build": "rimraf ./dist && tsc",
+    "test": "rimraf ./dist-test && tsc -p tsconfig.test.json && node --test \"dist-test/**/*.test.js\"",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -32,7 +33,7 @@
   },
   "dependencies": {
     "bobolink": "^3.0.0",
-    "node-echonet-lite": "^0.6.0"
+    "echonet-lite": "^2.19.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

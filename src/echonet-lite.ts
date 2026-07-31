@@ -1,87 +1,166 @@
-import Bobolink from "bobolink";
-import type { Logging } from "homebridge";
-import EchonetLite from "node-echonet-lite";
-import type { ELPropertyData, ELResponse } from "node-echonet-lite";
+import type { Socket } from "node:dgram";
 
+import Bobolink from "bobolink";
+import EL from "echonet-lite";
+import type { ELData, Rinfo } from "echonet-lite";
+import type { Logging } from "homebridge";
+
+import type { Property, WritableProperty } from "./codec.js";
+import { expandPropertyMap } from "./codec.js";
 import type { DiscoveredObjects, EOJ } from "./types.js";
+import { formatEOJ } from "./utils.js";
 
 const REJOIN_INTERVAL_MS = 4 * 60 * 1000;
+// Matches the timeout Bobolink applied to queued tasks previously, so an
+// unresponsive device fails in the same time as before.
+const REQUEST_TIMEOUT_MS = 15 * 1000;
 
-// Typed, promisified wrapper around node-echonet-lite. Get/set requests are
-// funneled through queues to avoid flooding devices, and the private
-// LAN-transport internals (UDP socket, multicast membership) are confined here.
+// This plugin acts as a controller object.
+const CONTROLLER_EOJ = "05ff01";
+// Instance list S of the node profile, which a discovery scan asks for.
+const EPC_INSTANCE_LIST = "d6";
+const PROPERTY_MAP_EPCS = ["9d", "9e", "9f"] as const;
+
+// The service codes that answer a request. Anything else arriving with a
+// matching transaction ID is not a response to it.
+const RESPONSE_ESVS = new Set([EL.GET_RES, EL.SET_RES]);
+const ERROR_ESVS = new Set([EL.GET_SNA, EL.SETC_SNA, EL.SETI_SNA, EL.INF_SNA, EL.SETGET_SNA]);
+
+// The properties a device reports it supports, as EPC lists.
+export interface PropertyMaps {
+  inf: number[];
+  set: number[];
+  get: number[];
+}
+
+// A property notification pushed by a device, already decoded.
+export interface Notification {
+  address: string;
+  seoj: EOJ;
+  // Keyed by EPC, holding the raw EDT. Callers decode the ones they care about.
+  properties: Map<number, Buffer>;
+}
+
+interface Pending {
+  eoj: string;
+  resolve: (details: Record<string, string>) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+function toEOJ(hex: string): EOJ | null {
+  const bytes = Buffer.from(hex, "hex");
+  return bytes.length >= 3 ? [bytes[0], bytes[1], bytes[2]] : null;
+}
+
+function epcKey(epc: number): string {
+  return epc.toString(16).padStart(2, "0");
+}
+
+// Typed, promisified wrapper around echonet-lite. The library is fire-and-forget
+// with a single callback for every inbound packet, so matching a response to its
+// request happens here. Get/set requests are funneled through queues to avoid
+// flooding devices, and everything below is raw EDT: interpreting those bytes is
+// the codec's job.
 export class EchonetLiteClient {
-  private readonly el = new EchonetLite({ lang: "ja", type: "lan" });
   private readonly getQueue = new Bobolink({ concurrency: 50 });
   private readonly setQueue = new Bobolink({ concurrency: 1 });
+  private readonly pending = new Map<string, Pending>();
+  private readonly notifyListeners = new Set<(notification: Notification) => void>();
+  private discoveryListener: ((objects: DiscoveredObjects) => void) | null = null;
+  private discoveredAddresses = new Set<string>();
   private rejoinTimer: NodeJS.Timeout | null = null;
+  // The receiving socket, kept from initialize() so the multicast membership
+  // can be renewed without reaching for the library's module-level globals.
+  private socket: Socket | null = null;
 
   constructor(private readonly log: Logging) {}
 
-  init(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.el.init((err) => {
-        if (err !== null) {
-          reject(err);
-          return;
-        }
-        const udp = this.el.mELNet.udp;
-        udp.on("close", () => this.log.info("UDP close"));
-        udp.on("connect", () => this.log.info("UDP connect"));
-        udp.on("error", (err) => this.log.error("UDP error:", err));
-        // Tied to the socket rather than to a discovery scan: a boot that
-        // restores cached accessories never scans, and it still needs the
-        // membership kept alive to receive notifications.
-        this.startMembershipRenewal();
-        resolve();
-      });
+  async init(): Promise<void> {
+    if (this.socket !== null) {
+      // echonet-lite keeps its state in module-level globals, so a second
+      // initialize would silently replace the first one's sockets.
+      throw new Error("ECHONET Lite client is already initialized");
+    }
+
+    const socket = EL.initialize([CONTROLLER_EOJ], (rinfo, els, err) => this.handlePacket(rinfo, els, err), 4, {
+      ignoreMe: true,
+      // This plugin decides for itself what to read and when; the library's
+      // automatic property sweep would fight the request queues.
+      autoGetProperties: false,
     });
+    this.socket = socket;
+
+    socket.on("close", () => this.log.info("UDP close"));
+    socket.on("error", (err) => this.log.error("UDP error:", err));
+
+    // initialize() returns before the socket has finished binding, and sending
+    // on an unbound socket is silently lost.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Tied to the socket rather than to a discovery scan: a boot that
+    // restores cached accessories never scans, and it still needs the
+    // membership kept alive to receive notifications.
+    this.startMembershipRenewal();
+  }
+
+  close(): void {
+    this.stopMembershipRenewal();
+    for (const [key, entry] of this.pending) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error("ECHONET Lite client closed"));
+      this.pending.delete(key);
+    }
+    if (this.socket !== null) {
+      EL.release();
+      this.socket = null;
+    }
   }
 
   // Starts a discovery scan. `onObjects` is invoked once per responding address.
   startDiscovery(onObjects: (objects: DiscoveredObjects) => void): void {
-    this.el.startDiscovery((err, res) => {
-      if (err) {
-        this.log.error("Error in discovery:", err);
-        return;
-      }
-      const eojList = res.device.eoj.filter((e) => e.length >= 3).map((e): EOJ => [e[0], e[1], e[2]]);
-      onObjects({ address: res.device.address, eojList });
-    });
+    this.discoveryListener = onObjects;
+    this.discoveredAddresses = new Set();
+    EL.search();
   }
 
   stopDiscovery(): void {
-    this.el.stopDiscovery();
+    this.discoveryListener = null;
   }
 
-  getClassName(eoj: EOJ): string | null {
-    return this.el.getClassName(eoj[0], eoj[1]);
+  // Reads a single property. Resolves to null when the device answered but had
+  // no usable value for it, which callers treat as "unavailable" rather than as
+  // an error.
+  async getProperty<T>(address: string, eoj: EOJ, property: Property<T>): Promise<T | null> {
+    const details = await this.runQueued(this.getQueue, () =>
+      this.request(address, eoj, EL.GET, { [epcKey(property.epc)]: "" }),
+    );
+    const edt = details[epcKey(property.epc)];
+    if (edt == null || edt === "") {
+      return null;
+    }
+    return property.decode(Buffer.from(edt, "hex"));
   }
 
-  getPropertyMaps(address: string, eoj: EOJ): Promise<ELResponse> {
-    return new Promise((resolve, reject) => {
-      this.el.getPropertyMaps(address, eoj, (err, res) => (err ? reject(err) : resolve(res)));
-    });
+  async setProperty<T>(address: string, eoj: EOJ, property: WritableProperty<T>, value: T): Promise<void> {
+    const edt = property.encode(value).toString("hex");
+    await this.runQueued(this.setQueue, () => this.request(address, eoj, EL.SETC, { [epcKey(property.epc)]: edt }));
   }
 
-  getPropertyValue(address: string, eoj: EOJ, epc: number): Promise<ELResponse> {
-    return this.runQueued(this.getQueue, () => {
-      return new Promise((resolve, reject) => {
-        this.el.getPropertyValue(address, eoj, epc, (err, res) => (err ? reject(err) : resolve(res)));
-      });
-    });
+  async getPropertyMaps(address: string, eoj: EOJ): Promise<PropertyMaps> {
+    const details = await this.runQueued(this.getQueue, () =>
+      this.request(address, eoj, EL.GET, Object.fromEntries(PROPERTY_MAP_EPCS.map((epc) => [epc, ""]))),
+    );
+    const mapOf = (epc: string) => {
+      const edt = details[epc];
+      return edt ? expandPropertyMap(Buffer.from(edt, "hex")) : [];
+    };
+    return { inf: mapOf("9d"), set: mapOf("9e"), get: mapOf("9f") };
   }
 
-  setPropertyValue(address: string, eoj: EOJ, epc: number, edt: ELPropertyData): Promise<ELResponse> {
-    return this.runQueued(this.setQueue, () => {
-      return new Promise((resolve, reject) => {
-        this.el.setPropertyValue(address, eoj, epc, edt, (err, res) => (err ? reject(err) : resolve(res)));
-      });
-    });
-  }
-
-  onNotify(listener: (res: ELResponse) => void): void {
-    this.el.on("notify", listener);
+  onNotify(listener: (notification: Notification) => void): () => void {
+    this.notifyListeners.add(listener);
+    return () => this.notifyListeners.delete(listener);
   }
 
   // The multicast group membership is renewed periodically because some
@@ -91,9 +170,16 @@ export class EchonetLiteClient {
       return;
     }
     this.rejoinTimer = setInterval(() => {
+      const socket = this.socket;
+      if (socket === null) {
+        return;
+      }
+      // "0.0.0.0" means the default interface, which is what the library binds
+      // with unless a NIC has been pinned.
+      const iface = EL.usingIF.v4 === "" ? undefined : EL.usingIF.v4;
       try {
-        this.el.mELNet._dropMembership();
-        this.el.mELNet._addMembership();
+        socket.dropMembership(EL.EL_Multi, iface);
+        socket.addMembership(EL.EL_Multi, iface);
         this.log.debug("Renewed multicast group membership");
       } catch (error) {
         this.log.error("Failed to renew multicast group membership:", error);
@@ -111,7 +197,150 @@ export class EchonetLiteClient {
     this.log.info("Cleared multicast membership renewal timer");
   }
 
-  private async runQueued(queue: Bobolink, task: () => Promise<ELResponse>): Promise<ELResponse> {
+  // Sends one request and resolves with the DETAILs of its response. The
+  // transaction ID the library returns is a copy of the counter it put on the
+  // wire, so it stays valid as a key while later requests bump that counter.
+  private request(
+    address: string,
+    eoj: EOJ,
+    esv: string,
+    details: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const eojHex = formatEOJ(eoj).slice(2);
+    return new Promise((resolve, reject) => {
+      const tid = EL.sendDetails(address, CONTROLLER_EOJ, eojHex, esv, details);
+      const key = `${Buffer.from(tid).toString("hex")}|${address}`;
+
+      // A transaction ID already in flight would be overwritten below, losing
+      // the earlier request forever. The counter is 16 bits, so this only
+      // happens if 65536 requests are outstanding at once.
+      const existing = this.pending.get(key);
+      if (existing) {
+        clearTimeout(existing.timer);
+        existing.reject(new Error(`Transaction ID reused for ${address} ${eojHex}`));
+      }
+
+      const timer = setTimeout(() => {
+        this.pending.delete(key);
+        reject(new Error(`Timed out waiting for ${address} ${eojHex} after ${REQUEST_TIMEOUT_MS}ms`));
+      }, REQUEST_TIMEOUT_MS);
+
+      this.pending.set(key, {
+        eoj: eojHex,
+        resolve: (value) => {
+          clearTimeout(timer);
+          this.pending.delete(key);
+          resolve(value);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          this.pending.delete(key);
+          reject(err);
+        },
+        timer,
+      });
+    });
+  }
+
+  private handlePacket(rinfo: Rinfo, els: ELData, err: Error | null): void {
+    if (err) {
+      this.log.debug("Ignoring an unparsable packet from", rinfo.address, err.message);
+      return;
+    }
+
+    this.resolvePending(rinfo, els);
+
+    if (els.ESV === EL.INF || els.ESV === EL.INFC) {
+      this.handleNotification(rinfo, els);
+    }
+    if (this.discoveryListener !== null && (els.ESV === EL.GET_RES || els.ESV === EL.INF)) {
+      this.handleDiscoveryResponse(rinfo, els);
+    }
+  }
+
+  // Matches a response to the request that is waiting for it. The transaction
+  // ID alone is not enough: it is shared across every device this process talks
+  // to and wraps around, and the plugin's own requests can carry the same one.
+  private resolvePending(rinfo: Rinfo, els: ELData): void {
+    const isResponse = RESPONSE_ESVS.has(els.ESV);
+    const isError = ERROR_ESVS.has(els.ESV);
+    if (!isResponse && !isError) {
+      return;
+    }
+    if (els.DEOJ !== CONTROLLER_EOJ) {
+      return;
+    }
+
+    const key = `${els.TID}|${rinfo.address}`;
+    const entry = this.pending.get(key);
+    if (!entry || entry.eoj !== els.SEOJ) {
+      return;
+    }
+
+    if (isError) {
+      entry.reject(new Error(`Device ${rinfo.address} ${els.SEOJ} rejected the request (ESV ${els.ESV})`));
+      return;
+    }
+    entry.resolve(els.DETAILs);
+  }
+
+  private handleNotification(rinfo: Rinfo, els: ELData): void {
+    if (this.notifyListeners.size === 0) {
+      return;
+    }
+    const seoj = toEOJ(els.SEOJ);
+    if (seoj === null) {
+      return;
+    }
+
+    const properties = new Map<number, Buffer>();
+    for (const [epc, edt] of Object.entries(els.DETAILs)) {
+      if (edt !== "") {
+        properties.set(parseInt(epc, 16), Buffer.from(edt, "hex"));
+      }
+    }
+    if (properties.size === 0) {
+      return;
+    }
+
+    const notification: Notification = { address: rinfo.address, seoj, properties };
+    for (const listener of this.notifyListeners) {
+      listener(notification);
+    }
+  }
+
+  // A discovery scan reads the node profile's instance list, which names every
+  // object the node hosts.
+  private handleDiscoveryResponse(rinfo: Rinfo, els: ELData): void {
+    const edt = els.DETAILs[EPC_INSTANCE_LIST];
+    if (!edt) {
+      return;
+    }
+    // A node answers the multicast once, but a retransmission or a concurrent
+    // notification would otherwise report it twice in the same scan.
+    if (this.discoveredAddresses.has(rinfo.address)) {
+      return;
+    }
+    this.discoveredAddresses.add(rinfo.address);
+
+    // The instance list is a count byte followed by three bytes per object,
+    // which is the same layout a property map uses.
+    const bytes = Buffer.from(edt, "hex");
+    const count = Math.min(bytes.readUInt8(0), Math.floor((bytes.length - 1) / 3));
+    const eojList: EOJ[] = [];
+    for (let i = 0; i < count; i++) {
+      const offset = 1 + i * 3;
+      eojList.push([bytes[offset], bytes[offset + 1], bytes[offset + 2]]);
+    }
+
+    if (eojList.length === 0) {
+      return;
+    }
+    this.log.debug("Discovered", eojList.length, "object(s) at", rinfo.address);
+    this.discoveryListener?.({ address: rinfo.address, eojList });
+  }
+
+  private async runQueued<T>(queue: Bobolink, task: () => Promise<T>): Promise<T> {
     const state = await queue.put(task);
     if (state.err !== undefined || state.res === null) {
       throw state.err ?? new Error("ECHONET Lite request failed");

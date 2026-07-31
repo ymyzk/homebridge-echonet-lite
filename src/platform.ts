@@ -1,12 +1,12 @@
 import type { API, Characteristic, DynamicPlatformPlugin, Logging, PlatformAccessory, Service } from "homebridge";
 
-import { createAccessoryHandler } from "./accessories/factory.js";
+import { createAccessoryHandler, getClassName, isSupportedEOJ } from "./accessories/factory.js";
 import { isRefreshSwitchAccessory, setUpRefreshSwitch } from "./accessories/refresh-switch.js";
 import { getAccessoryContext, setAccessoryContext } from "./accessory-context.js";
+import { IdentificationNumber } from "./codec.js";
 import { DiscoveryController } from "./discovery.js";
 import { EchonetDevice } from "./echonet-device.js";
 import { EchonetLiteClient } from "./echonet-lite.js";
-import { SUPER_EPC } from "./epc.js";
 import { readLegacyStorage } from "./legacy-storage.js";
 import { PLATFORM_NAME, PLUGIN_NAME } from "./settings.js";
 import type { DiscoveredObjects, ELPlatformConfig } from "./types.js";
@@ -39,6 +39,12 @@ export class ELPlatform implements DynamicPlatformPlugin {
 
     this.log.info("Finished initializing platform:", this.config.name);
     this.api.on("didFinishLaunching", () => void this.init());
+    // Releases the socket bound to port 3610, which a restarting Homebridge
+    // would otherwise have to wait for.
+    this.api.on("shutdown", () => {
+      this.discovery.stop();
+      this.client.close();
+    });
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
@@ -150,17 +156,17 @@ export class ELPlatform implements DynamicPlatformPlugin {
       const probe = new EchonetDevice(this.client, address, eoj);
       this.log.info("Discovered device:", probe.logId);
 
-      // node-echonet-lite has no name for an unknown class code, and this
-      // plugin has no handler for one either, so skip it before probing.
-      if (!this.client.getClassName(eoj)) {
+      // Nothing here can drive a device this plugin has no handler for, so skip
+      // it before spending a probe on it.
+      if (!isSupportedEOJ(eoj)) {
         continue;
       }
 
-      let uid: string | undefined;
+      let uid: string | null = null;
       try {
         // The accessory UUID is derived from this, so an accessory survives a
         // change of address.
-        uid = (await probe.getData(SUPER_EPC.IDENTIFICATION_NUMBER)).uid;
+        uid = await probe.get(IdentificationNumber);
         this.log.debug("UID for", probe.logId, "is", uid);
       } catch {
         // Fall back to the address-based ID below.
@@ -183,7 +189,7 @@ export class ELPlatform implements DynamicPlatformPlugin {
   private async syncAccessory(device: EchonetDevice, uuid: string): Promise<void> {
     const registered = this.accessories.get(uuid);
     const accessory =
-      registered ?? new this.api.platformAccessory(this.client.getClassName(device.eoj) ?? "ECHONET Lite Device", uuid);
+      registered ?? new this.api.platformAccessory(getClassName(device.eoj) ?? "ECHONET Lite Device", uuid);
 
     // The same device is reported again by every later scan, but the handler is
     // built once: a second one would subscribe to notifications on top of the
