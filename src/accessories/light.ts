@@ -127,6 +127,9 @@ export class LightAccessory {
       .getCharacteristic(this.Characteristic.Brightness)
       .onSet(async (value) => {
         const level = value as number;
+        // Dragging the brightness slider sends a write per step and sets run
+        // one at a time, so the cache is updated before the write rather than
+        // after it: the repeats are dropped here instead of queueing up.
         if (level === this.brightness) {
           this.log.debug("Setting brightness no-op:", this.device.logId, level);
           return;
