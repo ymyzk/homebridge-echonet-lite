@@ -29,6 +29,10 @@ export class EchonetLiteClient {
         udp.on("close", () => this.log.info("UDP close"));
         udp.on("connect", () => this.log.info("UDP connect"));
         udp.on("error", (err) => this.log.error("UDP error:", err));
+        // Tied to the socket rather than to a discovery scan: a boot that
+        // restores cached accessories never scans, and it still needs the
+        // membership kept alive to receive notifications.
+        this.startMembershipRenewal();
         resolve();
       });
     });
